@@ -4,6 +4,10 @@ Let your apps meet and chat with each other.
 
 A modern, simple and consistent session bus for IPC discovery.
 
+> [!IMPORTANT]
+> This project is still in early development. I'm working on adding docs and improving the protocol, but
+> it's not set in stone yet.
+
 ## Why not D-Bus?
 
 D-Bus is old. Bad. Poorly designed, poorly documented, slow, annoying.
