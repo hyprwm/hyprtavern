@@ -27,6 +27,8 @@ class CBusObject {
     CBusObject(SP<CHpHyprtavernBusObjectV1Object>&& obj, const char* name);
     ~CBusObject() = default;
 
+    void                                             sendNewConnection(int fd);
+
     std::vector<std::pair<std::string, uint32_t>>    m_protocols;
     std::vector<std::pair<std::string, std::string>> m_props;
 

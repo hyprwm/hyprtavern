@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <format>
 
+#include <sys/socket.h>
+
 static SP<CHpHyprtavernCoreV1Impl> coreImpl;
 static uint32_t                    maxId = 1;
 
@@ -148,6 +150,10 @@ CBusObject::CBusObject(SP<CHpHyprtavernBusObjectV1Object>&& obj, const char* nam
     });
 }
 
+void CBusObject::sendNewConnection(int fd) {
+    m_object->sendNewFd(fd);
+}
+
 CBusObjectHandle::CBusObjectHandle(SP<CHpHyprtavernBusObjectHandleV1Object>&& obj, SP<CBusObject> busObject) : m_busObject(busObject), m_object(std::move(obj)) {
     if (!m_object->getObject())
         return;
@@ -161,7 +167,16 @@ CBusObjectHandle::CBusObjectHandle(SP<CHpHyprtavernBusObjectHandleV1Object>&& ob
             return;
         }
 
-        // TODO:
+        int fds[2];
+
+        if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) < 0) {
+            g_logger->log(LOG_ERR, "failed to create a socketpair");
+            m_object->sendSocketFailed();
+            return;
+        }
+
+        m_object->sendSocket(fds[0]);
+        m_busObject->sendNewConnection(fds[1]);
     });
 
     // send the data about the object
