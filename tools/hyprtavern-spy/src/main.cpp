@@ -1,0 +1,103 @@
+#include <hyprwire/hyprwire.hpp>
+#include <print>
+#include <hp_hyprtavern_core_v1-client.hpp>
+
+using namespace Hyprutils::Memory;
+
+#define SP CSharedPointer
+
+constexpr const uint32_t                     PROTOCOL_VERSION = 1;
+
+static SP<CCHpHyprtavernCoreV1Impl>          impl = makeShared<CCHpHyprtavernCoreV1Impl>(PROTOCOL_VERSION);
+static SP<CCHpHyprtavernCoreManagerV1Object> manager;
+static SP<CCHpHyprtavernBusQueryV1Object>    query;
+static SP<Hyprwire::IClientSocket>           sock;
+static bool                                  shouldQuit = false;
+
+//
+int main(int argc, char** argv, char** envp) {
+    const auto XDG_RUNTIME_DIR = getenv("XDG_RUNTIME_DIR");
+
+    if (!XDG_RUNTIME_DIR) {
+        std::println("err: no runtime dir");
+        return 1;
+    }
+
+    sock = Hyprwire::IClientSocket::open(XDG_RUNTIME_DIR + std::string{"/hyprtavern/ht.sock"});
+
+    if (!sock) {
+        std::println("err: tavern is not serving beer");
+        return 1;
+    }
+
+    sock->addImplementation(impl);
+
+    if (!sock->waitForHandshake()) {
+        std::println("err: handshake failed");
+        return 1;
+    }
+
+    const auto SPEC = sock->getSpec(impl->protocol()->specName());
+
+    if (!SPEC) {
+        std::println("err: protocol unsupported");
+        return 1;
+    }
+
+    manager = makeShared<CCHpHyprtavernCoreManagerV1Object>(sock->bindProtocol(impl->protocol(), PROTOCOL_VERSION));
+
+    {
+        query = makeShared<CCHpHyprtavernBusQueryV1Object>(
+            manager->sendGetQueryObject({}, HP_HYPRTAVERN_CORE_V1_BUS_QUERY_FILTER_MODE_ALL, {}, HP_HYPRTAVERN_CORE_V1_BUS_QUERY_FILTER_MODE_ALL));
+    }
+
+    query->setResults([](const std::vector<uint32_t>& ids) {
+        if (ids.size() == 1)
+            std::println("There is {} object in the tavern:", ids.size());
+        else
+            std::println("There are {} objects in the tavern:", ids.size());
+
+        for (const auto& id : ids) {
+            auto                     handle = makeShared<CCHpHyprtavernBusObjectHandleV1Object>(manager->sendGetObjectHandle(id));
+
+            std::string              name;
+            std::vector<std::string> protocols;
+            std::vector<uint32_t>    revs;
+            std::vector<std::string> props;
+
+            handle->setName([&name](const char* str) { name = str; });
+            handle->setProperties([&props](const std::vector<const char*>& p) {
+                for (const auto& pp : p) {
+                    props.emplace_back(pp);
+                }
+            });
+            handle->setProtocols([&protocols, &revs](const std::vector<const char*>& pn, const std::vector<uint32_t>& pr) {
+                for (const auto& x : pn) {
+                    protocols.emplace_back(x);
+                }
+
+                for (const auto& x : pr) {
+                    revs.emplace_back(x);
+                }
+            });
+
+            sock->roundtrip();
+
+            std::println(" ┣╸{}#{}:", name, id);
+            std::println(" ┃   ┣╸protocols:", name, id);
+            for (size_t i = 0; i < protocols.size(); ++i) {
+                std::println(" ┃   ┃   {}╸{}@{}", i == protocols.size() - 1 ? "┗" : "┣", protocols.at(i), revs.at(i));
+            }
+            std::println(" ┃   ┗╸props:");
+            for (size_t i = 0; i < props.size(); ++i) {
+                std::println(" ┃       {}╸{}", i == props.size() - 1 ? "┗" : "┣", props.at(i));
+            }
+        }
+
+        sock->roundtrip();
+    });
+
+    sock->roundtrip();
+
+    return 0;
+}
