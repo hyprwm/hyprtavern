@@ -6,13 +6,14 @@ using namespace Hyprutils::Memory;
 
 #define SP CSharedPointer
 
-constexpr const uint32_t                     PROTOCOL_VERSION = 1;
+constexpr const uint32_t                        PROTOCOL_VERSION = 1;
 
-static SP<CCHpHyprtavernCoreV1Impl>          impl = makeShared<CCHpHyprtavernCoreV1Impl>(PROTOCOL_VERSION);
-static SP<CCHpHyprtavernCoreManagerV1Object> manager;
-static SP<CCHpHyprtavernBusQueryV1Object>    query;
-static SP<Hyprwire::IClientSocket>           sock;
-static bool                                  shouldQuit = false;
+static SP<CCHpHyprtavernCoreV1Impl>             impl = makeShared<CCHpHyprtavernCoreV1Impl>(PROTOCOL_VERSION);
+static SP<CCHpHyprtavernCoreManagerV1Object>    manager;
+static SP<CCHpHyprtavernSecurityObjectV1Object> security;
+static SP<CCHpHyprtavernBusQueryV1Object>       query;
+static SP<Hyprwire::IClientSocket>              sock;
+static bool                                     shouldQuit = false;
 
 //
 int main(int argc, char** argv, char** envp) {
@@ -45,6 +46,28 @@ int main(int argc, char** argv, char** envp) {
     }
 
     manager = makeShared<CCHpHyprtavernCoreManagerV1Object>(sock->bindProtocol(impl->protocol(), PROTOCOL_VERSION));
+
+    {
+        // FIXME: store in kv YOU FUCKER
+        security = makeShared<CCHpHyprtavernSecurityObjectV1Object>(manager->sendGetSecurityObject("trertret"));
+
+        security->setToken([](const char* tk) {
+            std::println("DEBUG: security token obtained {}", tk);
+        });
+
+        security->sendObtainPermission(HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_TYPE_MONITORING_ALL_BUS_OBJECTS, HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_MODE_PERMANENT);
+
+        security->setPermissionResult([] (uint32_t perm, uint32_t result) {
+            if (result != HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_RESULT_GRANTED_BY_POLICY && result != HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_RESULT_GRANTED && result != HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_RESULT_ALREADY_GRANTED) {
+                std::println("err: permission to monitor all denied");
+                exit(1);
+            }
+
+            std::println("DEBUG: granted perm by tavern");
+        });
+
+        sock->roundtrip();
+    }
 
     {
         query = makeShared<CCHpHyprtavernBusQueryV1Object>(

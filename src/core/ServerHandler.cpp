@@ -6,8 +6,13 @@
 #include <filesystem>
 #include <fstream>
 #include <cstdlib>
+#include <thread>
+#include <future>
 
 #include <sys/signal.h>
+#include <sys/socket.h>
+#include <sys/fcntl.h>
+#include <sys/poll.h>
 
 #include <hyprutils/os/File.hpp>
 
@@ -32,20 +37,25 @@ void CServerHandler::exit() {
 }
 
 CServerHandler::CServerHandler() {
+    signal(SIGCHLD, SIG_IGN);
+
     const auto RUNTIME_DIR = runtimeDir();
 
     if (RUNTIME_DIR.empty()) {
         g_logger->log(LOG_ERR, "XDG_RUNTIME_DIR needs to be set");
+        ::exit(1);
         return;
     }
 
     if (isAlreadyRunning()) {
         g_logger->log(LOG_ERR, "refusing to run: hyprtavern already running for the current user");
+        ::exit(1);
         return;
     }
 
     if (!createLockFile()) {
         g_logger->log(LOG_ERR, "refusing to run: failed to create a lock file");
+        ::exit(1);
         return;
     }
 
@@ -53,6 +63,7 @@ CServerHandler::CServerHandler() {
 
     if (!m_socket) {
         g_logger->log(LOG_ERR, "refusing to run: failed to open a socket");
+        ::exit(1);
         return;
     }
 
@@ -60,7 +71,11 @@ CServerHandler::CServerHandler() {
     signal(SIGINT, ::onSignal);
 
     g_coreProto = makeUnique<CCoreProtocolHandler>();
-    g_coreProto->init(m_socket);
+    if (!g_coreProto->init(m_socket)) {
+        g_logger->log(LOG_ERR, "refusing to run: failed to init proto");
+        ::exit(1);
+        return;
+    }
 }
 
 CServerHandler::~CServerHandler() {
@@ -69,8 +84,64 @@ CServerHandler::~CServerHandler() {
 }
 
 bool CServerHandler::run() {
+    if (!launchBarmaids()) {
+        g_logger->log(LOG_ERR, "refusing to run: failed to launch barmaids");
+        return false;
+    }
+
+    pollfd fds[2] = {
+        pollfd{
+            .fd     = m_socket->extractLoopFD(),
+            .events = POLLIN,
+        },
+        pollfd{
+            .revents = 0,
+        },
+    };
+
+    bool               barmaidInitCommenced = false, barmaidInitDone = false;
+    std::promise<bool> barmaidInitResult;
+    std::future<bool>  barmaidInitFuture = barmaidInitResult.get_future();
+
     while (!m_exit) {
-        m_socket->dispatchEvents(true);
+        if (poll(fds, barmaidInitDone ? 2 : 1, -1) < 0) {
+            g_logger->log(LOG_ERR, "poll() failed");
+            exit();
+            return false;
+        }
+
+        if (fds[0].revents & POLLIN)
+            m_socket->dispatchEvents();
+        if (fds[1].revents & POLLIN)
+            g_coreProto->m_client.kvSock->dispatchEvents();
+
+        if (!barmaidInitCommenced && g_coreProto->m_managers.size() >= 1 /* kv_store */) {
+            barmaidInitCommenced = true;
+            std::thread t([&barmaidInitResult] { barmaidInitResult.set_value(g_coreProto->initBarmaids()); });
+            t.detach();
+        }
+
+        if (!barmaidInitDone && barmaidInitFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            barmaidInitDone = true;
+            if (!barmaidInitFuture.get()) {
+                g_logger->log(LOG_ERR, "barmaid init failed");
+                return true;
+            }
+
+            fds[1].fd     = g_coreProto->m_client.kvSock->extractLoopFD();
+            fds[1].events = POLLIN;
+        }
+
+        if (fds[0].revents & POLLHUP) {
+            g_logger->log(LOG_ERR, "socket fd died");
+            return true;
+        }
+
+        if (fds[1].revents & POLLHUP) {
+            g_logger->log(LOG_ERR, "tavernkeep fd died");
+            exit();
+            return false;
+        }
     }
 
     return true;
@@ -152,4 +223,62 @@ void CServerHandler::removeFiles() {
 
 bool CServerHandler::good() {
     return m_socket;
+}
+
+static pid_t launch(const std::string& app, const std::vector<std::string>& params) {
+    std::vector<const char*> argv = {app.c_str()};
+    argv.reserve(params.size() + 1);
+    for (const auto& p : params) {
+        argv.emplace_back(p.c_str());
+    }
+    argv.emplace_back(nullptr);
+
+    auto fk = fork();
+
+    if (fk < 0) {
+        g_logger->log(LOG_ERR, "failed to fork for exec {}", app);
+        return fk;
+    }
+
+    if (fk == 0) {
+        execvp(app.c_str(), cc<char* const*>(argv.data()));
+        g_logger->log(LOG_ERR, "failed to execv {}", app);
+        exit(1);
+    }
+
+    return fk;
+}
+
+static bool isRunning(pid_t pid) {
+    if (pid <= 0)
+        return false;
+
+    if (::kill(pid, 0) == 0)
+        return true;
+
+    if (errno == EPERM)
+        return true;
+
+    return false;
+}
+
+bool CServerHandler::launchBarmaids() {
+    int fds[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) < 0) {
+        g_logger->log(LOG_ERR, "failed to create a socketpair");
+        return false;
+    }
+
+    fcntl(fds[0], F_SETFD, FD_CLOEXEC);
+
+    auto pid = launch("hyprtavern-kv", {"--fd", std::format("{}", fds[1])});
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    if (!isRunning(pid))
+        return false;
+
+    m_socket->addClient(fds[0]);
+
+    return true;
 }

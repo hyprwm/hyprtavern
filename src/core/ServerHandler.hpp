@@ -21,6 +21,8 @@ class CServerHandler {
     bool                        createLockFile();
     void                        removeFiles();
 
+    bool                        launchBarmaids();
+
     bool                        m_exit = false;
 
     SP<Hyprwire::IServerSocket> m_socket;

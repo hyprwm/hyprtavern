@@ -27,3 +27,6 @@ protocols/*.cpp
 
 tools/hyprtavern-spy/protocols/*.cpp
 tools/hyprtavern-spy/protocols/*.hpp
+
+barmaids/hyprtavern-kv/protocols/*.cpp
+barmaids/hyprtavern-kv/protocols/*.hpp
