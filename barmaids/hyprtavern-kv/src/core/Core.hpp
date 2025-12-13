@@ -8,8 +8,9 @@
 #include <hp_hyprtavern_kv_store_v1-server.hpp>
 
 struct SPermData {
-    std::string           tokenUsed;
-    std::vector<uint32_t> permissions;
+    WP<Hyprwire::IServerClient> client;
+    std::string                 tokenUsed;
+    std::vector<uint32_t>       permissions;
 };
 
 class CManagerObject {
@@ -54,9 +55,10 @@ class CCore {
         std::vector<SP<CManagerObject>> managers;
     } m_object;
 
-    CKvStore                                                m_kv;
+    CKvStore               m_kv;
 
-    std::unordered_map<Hyprwire::IServerClient*, SPermData> m_permDatas;
+    std::vector<SPermData> m_permDatas;
+    SPermData*             permDataFor(SP<Hyprwire::IServerClient>);
 
     friend class CManagerObject;
 };

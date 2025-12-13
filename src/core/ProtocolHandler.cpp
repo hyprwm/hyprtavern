@@ -215,6 +215,9 @@ CBusObjectHandle::CBusObjectHandle(SP<CHpHyprtavernBusObjectHandleV1Object>&& ob
             g_coreProto->m_oneTimeTokenMap[uuid] = m_manager->m_associatedSecurityToken;
             m_busObject->sendNewConnection(fds[1], uuid);
         }
+
+        close(fds[0]);
+        close(fds[1]);
     });
 
     // send the data about the object

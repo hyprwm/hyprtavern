@@ -7,8 +7,11 @@
 #include <filesystem>
 
 #include <hyprutils/os/File.hpp>
+#include <hyprutils/utils/ScopeGuard.hpp>
 
 #include <glaze/glaze.hpp>
+
+using namespace Hyprutils::Utils;
 
 constexpr const char* KV_STORE_FILE_NAME   = "hyprtavern-kv.dat";
 constexpr const char* TAVERN_DATA_DIR_NAME = "hyprtavern";
@@ -44,13 +47,21 @@ void CKvStore::init() {
 
         auto ret = GUI::firstTimeSetup();
 
-        g_logger->log(LOG_DEBUG, "REMOVE ME: USER CHOSE {}", ret.value_or("ERRRRRR"));
-
         saveToDisk();
+    } else {
+        auto load = glz::read_json<SKvStorage>(*FILE_READ);
+
+        if (!load) {
+            g_logger->log(LOG_ERR, "kv store is corrupt... creating a new one.");
+            saveToDisk();
+        } else
+            m_storage = *load;
     }
 }
 
 void CKvStore::setGlobal(const std::string_view& key, const std::string_view& val) {
+    CScopeGuard x([this] { saveToDisk(); });
+
     for (auto& [k, v] : m_storage.global) {
         if (k != key)
             continue;
@@ -60,11 +71,11 @@ void CKvStore::setGlobal(const std::string_view& key, const std::string_view& va
     }
 
     m_storage.global.emplace_back(SKvEntry{.key = std::string{key}, .value = std::string{val}});
-
-    saveToDisk();
 }
 
 void CKvStore::setTavern(const std::string_view& key, const std::string_view& val) {
+    CScopeGuard x([this] { saveToDisk(); });
+
     for (auto& [k, v] : m_storage.tavern) {
         if (k != key)
             continue;
@@ -74,12 +85,12 @@ void CKvStore::setTavern(const std::string_view& key, const std::string_view& va
     }
 
     m_storage.tavern.emplace_back(SKvEntry{.key = std::string{key}, .value = std::string{val}});
-
-    saveToDisk();
 }
 
 void CKvStore::setApp(const std::string_view& app, const std::string_view& key, const std::string_view& val) {
-    auto appIt = std::ranges::find_if(m_storage.apps, [&app](const auto& e) { return e.appName == app; });
+    CScopeGuard x([this] { saveToDisk(); });
+
+    auto        appIt = std::ranges::find_if(m_storage.apps, [&app](const auto& e) { return e.appName == app; });
     if (appIt == m_storage.apps.end()) {
         m_storage.apps.emplace_back(SKvApp{
             .appName = std::string{app},
@@ -97,8 +108,6 @@ void CKvStore::setApp(const std::string_view& app, const std::string_view& key, 
     }
 
     appIt->entries.emplace_back(SKvEntry{.key = std::string{key}, .value = std::string{val}});
-
-    saveToDisk();
 }
 
 std::optional<std::string> CKvStore::getGlobal(const std::string_view& key) {

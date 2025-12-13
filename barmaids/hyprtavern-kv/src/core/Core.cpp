@@ -44,8 +44,8 @@ CManagerObject::CManagerObject(SP<CHpHyprtavernKvStoreManagerV1Object> obj) : m_
 
     m_object->setOnDestroy([this]() { g_core->removeObject(this); });
 
-    if (g_core->m_permDatas.contains(m_object->getObject()->client().get()))
-        m_perms = g_core->m_permDatas[m_object->getObject()->client().get()];
+    if (const auto PERM = g_core->permDataFor(m_object->getObject()->client()); PERM)
+        m_perms = *PERM;
 
     m_pid = m_object->getObject()->client()->getPID();
 
@@ -109,7 +109,15 @@ CManagerObject::CManagerObject(SP<CHpHyprtavernKvStoreManagerV1Object> obj) : m_
 }
 
 CManagerObject::~CManagerObject() {
-    g_core->m_permDatas.erase(m_object->getObject()->client().get());
+    std::erase_if(g_core->m_permDatas, [this](const auto& e) {
+        if (!e.client)
+            return true;
+
+        if (m_object && m_object->getObject() && m_object->getObject()->client())
+            return e.client == m_object->getObject()->client();
+
+        return false;
+    });
 }
 
 static std::expected<std::string, std::string> binaryNameForPid(pid_t pid) {
@@ -198,20 +206,21 @@ bool CCore::init(int fd) {
             return;
         }
 
-        SPermData data = {
-            .tokenUsed = token,
-        };
+        auto permData       = permDataFor(x);
+        permData->tokenUsed = token;
 
-        if (!data.tokenUsed.empty()) {
+        if (!permData->tokenUsed.empty()) {
             // get the perms from the bus
             auto response = makeShared<CCHpHyprtavernSecurityResponseV1Object>(m_tavern.manager->sendGetSecurityResponse(token));
 
-            response->setPermissions([&data](const std::vector<uint32_t>& perms) { data.permissions = perms; });
+            response->setPermissions([&permData, fd](const std::vector<uint32_t>& perms) {
+                g_logger->log(LOG_DEBUG, "incoming fd {} has {} perms", fd, perms.size());
+                permData->permissions = perms;
+            });
 
             m_tavern.socket->roundtrip();
-        }
-
-        m_permDatas[x.get()] = data;
+        } else
+            g_logger->log(LOG_DEBUG, "incoming fd {} has no associated token", fd);
     });
 
     m_tavern.socket->roundtrip();
@@ -271,4 +280,17 @@ void CCore::run() {
 
 void CCore::removeObject(CManagerObject* r) {
     std::erase_if(m_object.managers, [r](const auto& e) { return e.get() == r; });
+}
+
+SPermData* CCore::permDataFor(SP<Hyprwire::IServerClient> c) {
+    for (auto& d : m_permDatas) {
+        if (d.client != c)
+            continue;
+
+        return &d;
+    }
+
+    m_permDatas.emplace_back(SPermData{.client = c});
+
+    return &m_permDatas.back();
 }
