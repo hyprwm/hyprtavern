@@ -26,6 +26,8 @@ static SP<CCHpHyprtavernKvStoreManagerV1Object> kvManager;
 static bool createNewSecurityObject(const std::string& token = "") {
     security = makeShared<CCHpHyprtavernSecurityObjectV1Object>(manager->sendGetSecurityObject(token.c_str()));
     security->sendSetIdentity("hyprtavern-spy", "Hyprtavern spy utility");
+    security->sendObtainPermission(HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_TYPE_MONITORING_ALL_BUS_OBJECTS, HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_MODE_PERMANENT);
+
     security->setToken([](const char* tk) {
         if (!kvManager)
             return;
@@ -33,7 +35,19 @@ static bool createNewSecurityObject(const std::string& token = "") {
         kvManager->sendSetValue(KV_TOKEN_NAME, tk, HP_HYPRTAVERN_KV_STORE_V1_VALUE_TYPE_APP_VALUE);
     });
 
-    sock->roundtrip();
+    std::optional<bool> permissionDone;
+
+    security->setPermissionResult([&permissionDone](uint32_t perm, uint32_t result) {
+        permissionDone = result == HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_RESULT_GRANTED_BY_POLICY || result == HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_RESULT_GRANTED ||
+            result == HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_RESULT_ALREADY_GRANTED;
+    });
+
+    while (!permissionDone.has_value()) {
+        sock->dispatchEvents(true);
+    }
+
+    if (!*permissionDone)
+        std::print("warning: permission to monitor all objects was denied, results may be incomplete");
 
     return true;
 }
