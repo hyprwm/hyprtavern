@@ -358,6 +358,8 @@ CSecurityObject::CSecurityObject(SP<CHpHyprtavernSecurityObjectV1Object>&& obj, 
         m_sessionPerms.emplace_back(type);
 
         m_object->sendPermissionResult(type, HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_RESULT_GRANTED_BY_POLICY);
+
+        // FIXME: send to kv persistent perms
     });
 
     if (!token.empty()) {
@@ -375,6 +377,7 @@ CSecurityObject::CSecurityObject(SP<CHpHyprtavernSecurityObjectV1Object>&& obj, 
             g_logger->log(LOG_DEBUG, "received a token that is not in our kv, probably empty");
         else {
             // found the token
+            m_token = token;
 
             auto parsed = glz::read_json<SPersistenceTokenKvData>(data);
             if (!parsed) {
@@ -388,7 +391,8 @@ CSecurityObject::CSecurityObject(SP<CHpHyprtavernSecurityObjectV1Object>&& obj, 
         }
     }
 
-    m_token = g_coreProto->generateToken();
+    if (m_token.empty())
+        m_token = g_coreProto->generateToken();
 
     m_object->sendToken(m_token.c_str());
 }
