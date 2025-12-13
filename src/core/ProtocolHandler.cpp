@@ -13,9 +13,11 @@
 
 constexpr const uint32_t               TAVERN_PROTOCOL_VERSION = 1;
 constexpr const uint32_t               KV_PROTOCOL_VERSION     = 1;
+constexpr const uint32_t               MAID_PROTOCOL_VERSION   = 1;
 
-static SP<CCHpHyprtavernCoreV1Impl>    clientCoreImpl = makeShared<CCHpHyprtavernCoreV1Impl>(TAVERN_PROTOCOL_VERSION);
-static SP<CCHpHyprtavernKvStoreV1Impl> clientKvImpl   = makeShared<CCHpHyprtavernKvStoreV1Impl>(KV_PROTOCOL_VERSION);
+static SP<CCHpHyprtavernCoreV1Impl>    clientCoreImpl    = makeShared<CCHpHyprtavernCoreV1Impl>(TAVERN_PROTOCOL_VERSION);
+static SP<CCHpHyprtavernKvStoreV1Impl> clientKvImpl      = makeShared<CCHpHyprtavernKvStoreV1Impl>(KV_PROTOCOL_VERSION);
+static SP<CCHpHyprtavernBarmaidV1Impl> clientBarmaidImpl = makeShared<CCHpHyprtavernBarmaidV1Impl>(MAID_PROTOCOL_VERSION);
 static SP<CHpHyprtavernCoreV1Impl>     coreImpl;
 static uint32_t                        maxId = 1;
 
@@ -598,10 +600,28 @@ bool CCoreProtocolHandler::initBarmaids() {
     }
 
     m_client.kvSock->addImplementation(clientKvImpl);
+    m_client.kvSock->addImplementation(clientBarmaidImpl);
 
     // handshake is estabilished
 
-    m_client.kvManager = makeShared<CCHpHyprtavernKvStoreManagerV1Object>(m_client.kvSock->bindProtocol(clientKvImpl->protocol(), KV_PROTOCOL_VERSION));
+    m_client.kvManager        = makeShared<CCHpHyprtavernKvStoreManagerV1Object>(m_client.kvSock->bindProtocol(clientKvImpl->protocol(), KV_PROTOCOL_VERSION));
+    m_client.kvBarmaidManager = makeShared<CCHpHyprtavernBarmaidManagerV1Object>(m_client.kvSock->bindProtocol(clientBarmaidImpl->protocol(), MAID_PROTOCOL_VERSION));
+
+    bool maidReady = false;
+
+    m_client.kvBarmaidManager->setReady([&maidReady] { maidReady = true; });
+
+    while (true) {
+        if (!m_client.kvSock->dispatchEvents(true)) {
+            g_logger->log(LOG_ERR, "CCoreProtocolHandler::initBarmaids: failed, barmaid died");
+            return false;
+        }
+
+        if (maidReady) {
+            g_logger->log(LOG_DEBUG, "CCoreProtocolHandler::initBarmaids: kv barmaid ready");
+            break;
+        }
+    }
 
     return true;
 }

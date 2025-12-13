@@ -33,8 +33,10 @@
 
 constexpr const uint32_t              TAVERN_PROTOCOL_VERSION = 1;
 constexpr const uint32_t              KV_PROTOCOL_VERSION     = 1;
+constexpr const uint32_t              MAID_PROTOCOL_VERSION   = 1;
 
 static SP<CCHpHyprtavernCoreV1Impl>   impl = makeShared<CCHpHyprtavernCoreV1Impl>(TAVERN_PROTOCOL_VERSION);
+static SP<CHpHyprtavernBarmaidV1Impl> barmaidImpl;
 static SP<CHpHyprtavernKvStoreV1Impl> kvImpl;
 
 //
@@ -194,6 +196,7 @@ bool CCore::init(int fd) {
     m_tavern.busObject = makeShared<CCHpHyprtavernBusObjectV1Object>(m_tavern.manager->sendGetBusObject("hyprtavern-kv"));
 
     m_tavern.busObject->sendExposeProtocol("hp_hyprtavern_kv_store_v1", KV_PROTOCOL_VERSION, {}, 1);
+    m_tavern.busObject->sendExposeProtocol("hp_hyprtavern_barmaid_v1", MAID_PROTOCOL_VERSION, {}, 1);
 
     static bool failedToExpose = false;
 
@@ -236,9 +239,34 @@ bool CCore::init(int fd) {
         auto x = m_object.managers.emplace_back(makeShared<CManagerObject>(makeShared<CHpHyprtavernKvStoreManagerV1Object>(std::move(obj)))); //
     });
 
-    m_object.socket->addImplementation(kvImpl);
+    barmaidImpl = makeShared<CHpHyprtavernBarmaidV1Impl>(1, [this](SP<Hyprwire::IObject> obj) {
+        auto x = m_object.barmaidManagers.emplace_back(makeShared<CHpHyprtavernBarmaidManagerV1Object>(std::move(obj))); //
+        if (m_object.ready)
+            x->sendReady();
 
-    m_kv.init();
+        x->setOnDestroy([this, w = WP<CHpHyprtavernBarmaidManagerV1Object>{x}] { std::erase(m_object.barmaidManagers, w); });
+    });
+
+    m_object.socket->addImplementation(kvImpl);
+    m_object.socket->addImplementation(barmaidImpl);
+
+    auto future = m_kv.init();
+
+    while (true) {
+        // TODO: some poll()? will be more loc... I should write a hu helper.
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        m_object.socket->dispatchEvents();
+        m_tavern.socket->dispatchEvents();
+
+        if (future.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+            break;
+    }
+
+    if (!future.get())
+        return false;
+
+    g_logger->log(LOG_DEBUG, "kv: ready!");
+    sendReady();
 
     return true;
 }
@@ -293,4 +321,11 @@ SPermData* CCore::permDataFor(SP<Hyprwire::IServerClient> c) {
     m_permDatas.emplace_back(SPermData{.client = c});
 
     return &m_permDatas.back();
+}
+
+void CCore::sendReady() {
+    m_object.ready = true;
+    for (const auto& m : m_object.barmaidManagers) {
+        m->sendReady();
+    }
 }

@@ -1,9 +1,10 @@
 #include "Kv.hpp"
 
 #include "../helpers/Logger.hpp"
-#include "../ui/SetupScreen.hpp"
+#include "../ui/GUI.hpp"
 
-#include <fstream>
+#include "Crypto.hpp"
+
 #include <filesystem>
 
 #include <hyprutils/os/File.hpp>
@@ -17,46 +18,43 @@ constexpr const char* KV_STORE_FILE_NAME   = "hyprtavern-kv.dat";
 constexpr const char* TAVERN_DATA_DIR_NAME = "hyprtavern";
 
 //
-void CKvStore::init() {
-    static const auto HOME = getenv("HOME");
+std::future<bool> CKvStore::init() {
 
-    if (!HOME) {
-        g_logger->log(LOG_ERR, "Can't create kv store: no $HOME");
-        return;
-    }
+    auto        future = m_initPromise.get_future();
+    std::thread t([this] {
+        static const auto HOME = getenv("HOME");
 
-    const auto      DIR_PATH = std::filesystem::path{HOME} / ".local" / "share" / TAVERN_DATA_DIR_NAME;
-
-    std::error_code ec;
-
-    if (!std::filesystem::exists(DIR_PATH, ec) || ec) {
-        // attempt to create
-        g_logger->log(LOG_DEBUG, "store dir at {} seems to not exist, creating.", DIR_PATH.string());
-        std::filesystem::create_directories(DIR_PATH, ec);
-
-        if (ec) {
-            g_logger->log(LOG_ERR, "failed to create store dir at {}.", DIR_PATH.string());
+        if (!HOME) {
+            g_logger->log(LOG_ERR, "Can't create kv store: no $HOME");
+            m_initPromise.set_value(false);
             return;
         }
-    }
 
-    // load
-    const auto FILE_READ = Hyprutils::File::readFileAsString((DIR_PATH / KV_STORE_FILE_NAME).string());
-    if (!FILE_READ) {
-        g_logger->log(LOG_ERR, "failed to read store file. Creating a new one...", DIR_PATH.string());
+        const auto      DIR_PATH = std::filesystem::path{HOME} / ".local" / "share" / TAVERN_DATA_DIR_NAME;
 
-        auto ret = GUI::firstTimeSetup();
+        std::error_code ec;
 
-        saveToDisk();
-    } else {
-        auto load = glz::read_json<SKvStorage>(*FILE_READ);
+        if (!std::filesystem::exists(DIR_PATH, ec) || ec) {
+            // attempt to create
+            g_logger->log(LOG_DEBUG, "store dir at {} seems to not exist, creating.", DIR_PATH.string());
+            std::filesystem::create_directories(DIR_PATH, ec);
 
-        if (!load) {
-            g_logger->log(LOG_ERR, "kv store is corrupt... creating a new one.");
-            saveToDisk();
-        } else
-            m_storage = *load;
-    }
+            if (ec) {
+                g_logger->log(LOG_ERR, "failed to create store dir at {}.", DIR_PATH.string());
+                m_initPromise.set_value(false);
+                return;
+            }
+        }
+
+        loadFromDisk();
+
+        m_initPromise.set_value(true);
+        return;
+    });
+
+    t.detach();
+
+    return future;
 }
 
 void CKvStore::setGlobal(const std::string_view& key, const std::string_view& val) {
@@ -148,29 +146,82 @@ std::optional<std::string> CKvStore::getApp(const std::string_view& app, const s
 }
 
 void CKvStore::saveToDisk() {
+    static const auto      HOME = getenv("HOME");
+    const auto             PATH = std::filesystem::path{HOME} / ".local" / "share" / TAVERN_DATA_DIR_NAME / KV_STORE_FILE_NAME;
+
+    Crypto::CEncryptedBlob blob(*glz::write_json(m_storage), m_password);
+    auto                   ret = blob.writeToFile(PATH);
+
+    if (!ret)
+        g_logger->log(LOG_ERR, "failed to store kv data on disk");
+}
+
+bool CKvStore::loadFromDisk() {
     static const auto HOME = getenv("HOME");
+    const auto        PATH = std::filesystem::path{HOME} / ".local" / "share" / TAVERN_DATA_DIR_NAME / KV_STORE_FILE_NAME;
 
-    if (!HOME) {
-        g_logger->log(LOG_ERR, "Can't save kv store: no $HOME");
-        return;
+    std::error_code   ec;
+
+    auto              firstTimeSetup = [this] {
+        g_logger->log(LOG_ERR, "kv store missing/corrupt: creating one");
+
+        auto ret = GUI::firstTimeSetup();
+
+        if (!ret) {
+            g_logger->log(LOG_ERR, "failed to open gui??");
+            return;
+        }
+
+        m_password = ret.value();
+
+        saveToDisk();
+    };
+
+    if (!std::filesystem::exists(PATH, ec) || ec) {
+        firstTimeSetup();
+        return true;
     }
 
-    const auto    FILE_PATH = std::filesystem::path{HOME} / ".local" / "share" / TAVERN_DATA_DIR_NAME / KV_STORE_FILE_NAME;
-    std::ofstream ofs(FILE_PATH, std::ios::trunc);
-    if (!ofs.good()) {
-        g_logger->log(LOG_ERR, "Can't save kv store: couldn't open file for write");
-        return;
+    // ask for password if necessary. Try our default one first for no-pass logins
+
+    Crypto::CEncryptedBlob blob(PATH, m_password);
+
+    while (blob.result() == Crypto::CRYPTO_RESULT_BAD_PW) {
+        auto ret = GUI::passwordAsk();
+
+        if (!ret) {
+            g_logger->log(LOG_DEBUG, "kv store: passwordAsk bad ret {}", ret.error());
+            break;
+        }
+
+        m_password = ret.value();
+
+        blob = Crypto::CEncryptedBlob(PATH, m_password);
+
+        if (blob.result() == Crypto::CRYPTO_RESULT_BAD_PW)
+            continue;
+
+        g_logger->log(LOG_DEBUG, "kv store: break on status {}", sc<uint32_t>(blob.result()));
+
+        break;
     }
 
-    // FIXME: this needs to be enc'd
-
-    auto str = glz::write_json(m_storage);
-    if (!str) {
-        g_logger->log(LOG_ERR, "Can't save kv store: failed to generate json");
-        return;
+    if (blob.result() != Crypto::CRYPTO_RESULT_OK) {
+        g_logger->log(LOG_ERR, "kv store corrupt: bad content, status {}, recreating one", sc<uint32_t>(blob.result()));
+        firstTimeSetup();
+        return true;
     }
 
-    ofs << *str;
+    auto json = glz::read_json<SKvStorage>(blob.data());
 
-    ofs.close();
+    if (!json) {
+        g_logger->log(LOG_ERR, "kv store corrupt: bad content, recreating one.");
+        firstTimeSetup();
+        return true;
+    }
+
+    m_storage = *json;
+
+    g_logger->log(LOG_DEBUG, "loaded kv store");
+    return true;
 }

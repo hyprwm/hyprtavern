@@ -110,6 +110,8 @@ bool CServerHandler::run() {
             return false;
         }
 
+        // TODO: restrict new clients connecting until barmaids are init'd
+
         if (fds[0].revents & POLLIN)
             m_socket->dispatchEvents();
         if (fds[1].revents & POLLIN)
@@ -125,7 +127,8 @@ bool CServerHandler::run() {
             barmaidInitDone = true;
             if (!barmaidInitFuture.get()) {
                 g_logger->log(LOG_ERR, "barmaid init failed");
-                return true;
+                exit();
+                return false;
             }
 
             fds[1].fd     = g_coreProto->m_client.kvSock->extractLoopFD();

@@ -6,6 +6,7 @@
 
 #include <hp_hyprtavern_core_v1-client.hpp>
 #include <hp_hyprtavern_kv_store_v1-server.hpp>
+#include <hp_hyprtavern_barmaid_v1-server.hpp>
 
 struct SPermData {
     WP<Hyprwire::IServerClient> client;
@@ -44,6 +45,8 @@ class CCore {
     void removeObject(CManagerObject*);
 
   private:
+    void sendReady();
+
     struct {
         SP<Hyprwire::IClientSocket>           socket;
         SP<CCHpHyprtavernCoreManagerV1Object> manager;
@@ -51,8 +54,10 @@ class CCore {
     } m_tavern;
 
     struct {
-        SP<Hyprwire::IServerSocket>     socket;
-        std::vector<SP<CManagerObject>> managers;
+        SP<Hyprwire::IServerSocket>                          socket;
+        std::vector<SP<CManagerObject>>                      managers;
+        std::vector<SP<CHpHyprtavernBarmaidManagerV1Object>> barmaidManagers;
+        bool                                                 ready = false;
     } m_object;
 
     CKvStore               m_kv;

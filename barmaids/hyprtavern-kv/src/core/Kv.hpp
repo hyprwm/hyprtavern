@@ -4,6 +4,7 @@
 #include <string_view>
 #include <vector>
 #include <optional>
+#include <future>
 
 class CKvStore {
   public:
@@ -14,8 +15,7 @@ class CKvStore {
     CKvStore(CKvStore&)       = delete;
     CKvStore(CKvStore&&)      = delete;
 
-    // blocks until interaction ends
-    void                       init();
+    std::future<bool>          init();
 
     void                       setGlobal(const std::string_view& key, const std::string_view& val);
     void                       setTavern(const std::string_view& key, const std::string_view& val);
@@ -27,6 +27,7 @@ class CKvStore {
 
   private:
     void saveToDisk();
+    bool loadFromDisk();
 
     struct SKvEntry {
         std::string key;
@@ -44,5 +45,8 @@ class CKvStore {
         std::vector<SKvEntry> tavern;
     };
 
-    SKvStorage m_storage;
+    std::promise<bool> m_initPromise;
+
+    SKvStorage         m_storage;
+    std::string        m_password = "vaxwashere"; // default pass for no-pass kv stores
 };

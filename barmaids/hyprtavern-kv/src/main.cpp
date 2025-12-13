@@ -44,12 +44,12 @@ int main(int argc, const char** argv, const char** envp) {
     }
 
     g_core = makeUnique<CCore>();
-    if (!g_core->init(*FD_ARG)){
+    if (!g_core->init(*FD_ARG)) {
         g_logger->log(LOG_ERR, "failed starting kv");
         return 1;
     }
 
     g_core->run();
-    
+
     return 0;
 }

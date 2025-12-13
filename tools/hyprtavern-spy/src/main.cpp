@@ -17,7 +17,6 @@ static SP<CCHpHyprtavernCoreManagerV1Object>    manager;
 static SP<CCHpHyprtavernSecurityObjectV1Object> security;
 static SP<CCHpHyprtavernBusQueryV1Object>       query;
 static SP<Hyprwire::IClientSocket>              sock, kvSock;
-static bool                                     shouldQuit = false;
 
 static SP<CCHpHyprtavernKvStoreManagerV1Object> kvManager;
 

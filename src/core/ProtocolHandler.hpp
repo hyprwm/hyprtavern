@@ -3,6 +3,7 @@
 #include <hp_hyprtavern_core_v1-server.hpp>
 #include <hp_hyprtavern_core_v1-client.hpp>
 #include <hp_hyprtavern_kv_store_v1-client.hpp>
+#include <hp_hyprtavern_barmaid_v1-client.hpp>
 
 #include "../helpers/Memory.hpp"
 
@@ -136,6 +137,7 @@ class CCoreProtocolHandler {
         SP<Hyprwire::IClientSocket>              kvSock;
 
         SP<CCHpHyprtavernKvStoreManagerV1Object> kvManager;
+        SP<CCHpHyprtavernBarmaidManagerV1Object> kvBarmaidManager;
         WP<Hyprwire::IServerClient>              wireClient;
     } m_client;
 

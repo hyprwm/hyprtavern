@@ -50,6 +50,7 @@ endfunction()
 
 hyprprotocol(hyprtavern hp_hyprtavern_core_v1 false)
 hyprprotocolServer(hyprtavern hp_hyprtavern_kv_store_v1 false)
+hyprprotocolServer(hyprtavern hp_hyprtavern_barmaid_v1 false)
 
 target_include_directories(hyprtavern-kv PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/protocols")
 

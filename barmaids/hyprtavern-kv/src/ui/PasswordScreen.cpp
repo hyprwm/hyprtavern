@@ -34,12 +34,7 @@ static struct {
     SP<CColumnLayoutElement> layoutInner;
 } state;
 
-constexpr const char* INFO_BOX_TEXT = R"#(Welcome to hyprtavern. If you see this screen, it means you have not set up the secure kv store yet.
-This is a place for your apps to store sensitive information in. For your security, we ask you to set up a password.
-
-You can leave the password empty, which will disable encryption of your secrets.
-
-You can learn about the risks of doing that on the Hyprland wiki at wiki.hypr.land, in the Hyprland Ecosystem > hyprtavern > KV store section.)#";
+constexpr const char* INFO_BOX_TEXT = R"#(Input your password to unlock the secret store)#";
 
 static std::string    run() {
     if (!backend)
@@ -48,7 +43,7 @@ static std::string    run() {
     static std::string chosenPw = "";
 
     //
-    const Vector2D WINDOW_SIZE = {600, 300};
+    const Vector2D WINDOW_SIZE = {400, 150};
     auto           window =
         CWindowBuilder::begin()->preferredSize(WINDOW_SIZE)->minSize(WINDOW_SIZE)->maxSize(WINDOW_SIZE)->appTitle("KV Store Setup")->appClass("hyprtavern-kv")->commence();
 
@@ -64,11 +59,8 @@ static std::string    run() {
     layout->addChild(state.layoutInner);
     state.layoutInner->setGrow(true);
 
-    state.title = CTextBuilder::begin()
-                      ->text("Hyprtavern KV store setup")
-                      ->fontSize(CFontSize{CFontSize::HT_FONT_H2})
-                      ->color([] { return backend->getPalette()->m_colors.text; })
-                      ->commence();
+    state.title =
+        CTextBuilder::begin()->text("Hyprtavern KV Store")->fontSize(CFontSize{CFontSize::HT_FONT_H2})->color([] { return backend->getPalette()->m_colors.text; })->commence();
 
     state.text = CTextBuilder::begin()
                      ->text(INFO_BOX_TEXT)
@@ -77,10 +69,10 @@ static std::string    run() {
                      ->async(false)
                      ->commence();
 
-    auto nullBeforeBox = CNullBuilder::begin()->size({CDynamicSize::HT_SIZE_ABSOLUTE, CDynamicSize::HT_SIZE_ABSOLUTE, {1, 30}})->commence();
+    auto nullBeforeBox = CNullBuilder::begin()->size({CDynamicSize::HT_SIZE_ABSOLUTE, CDynamicSize::HT_SIZE_ABSOLUTE, {1, 10}})->commence();
 
     state.textbox = CTextboxBuilder::begin()
-                        ->placeholder("Set a password...")
+                        ->placeholder("password...")
                         ->size({CDynamicSize::HT_SIZE_ABSOLUTE, CDynamicSize::HT_SIZE_ABSOLUTE, {250, 25}})
                         ->multiline(false)
                         ->password(true)
@@ -142,7 +134,7 @@ static std::string    run() {
     return chosenPw;
 }
 
-std::expected<std::string, std::string> GUI::firstTimeSetup() {
+std::expected<std::string, std::string> GUI::passwordAsk() {
     auto RET = run();
 
     state = {};
