@@ -1,4 +1,5 @@
 #include "GUI.hpp"
+#include "../helpers/Logger.hpp"
 
 #include <hyprtoolkit/core/Backend.hpp>
 #include <hyprtoolkit/window/Window.hpp>
@@ -48,8 +49,10 @@ static std::optional<std::string> run() {
 
     static std::string chosenPw = "";
 
-    if (!backend)
+    if (!backend) {
+        g_logger->log(LOG_ERR, "toolkit: failed to open a dialog");
         return std::nullopt;
+    }
 
     //
     const Vector2D WINDOW_SIZE = {600, 300};

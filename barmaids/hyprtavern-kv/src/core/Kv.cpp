@@ -22,6 +22,9 @@ constexpr const char* TAVERN_DATA_DIR_NAME = "hyprtavern";
 void CKvStore::init() {
     m_initPromise = {};
     m_initFuture  = m_initPromise.get_future();
+
+    g_logger->log(LOG_DEBUG, "kv: initializing");
+
     std::thread t([this] {
         static const auto HOME = getenv("HOME");
 
@@ -51,6 +54,8 @@ void CKvStore::init() {
         m_initPromise.set_value(ret);
         if (ret == KV_STORE_INIT_OK)
             m_open = true;
+
+        g_logger->log(LOG_DEBUG, "kv: init result {}", sc<uint32_t>(ret));
 
         // wake up the main thread
         write(g_core->m_kvEventWrite.get(), "x", 1);

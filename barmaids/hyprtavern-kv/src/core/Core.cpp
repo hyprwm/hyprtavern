@@ -252,7 +252,7 @@ bool CCore::init(int fd) {
             x->sendReady();
 
         x->setOnDestroy([this, w = WP<CHpHyprtavernBarmaidManagerV1Object>{x}] { std::erase(m_object.barmaidManagers, w); });
-        x->setUpdateTavernEnvironment([w = WP<CHpHyprtavernBarmaidManagerV1Object>{x}](const std::vector<const char*>& names, const std::vector<const char*>& values) {
+        x->setUpdateTavernEnvironment([this, w = WP<CHpHyprtavernBarmaidManagerV1Object>{x}](const std::vector<const char*>& names, const std::vector<const char*>& values) {
             if (names.size() != values.size()) {
                 w->error(-1, "update_tavern_environment with mismatched arrays");
                 return;
@@ -266,6 +266,8 @@ bool CCore::init(int fd) {
                 else
                     setenv(names[i], values[i], true);
             }
+
+            m_kv.onEnvUpdate();
         });
     });
 

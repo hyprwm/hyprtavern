@@ -11,15 +11,17 @@
 #include <uuid.h>
 #include <glaze/glaze.hpp>
 
-constexpr const uint32_t               TAVERN_PROTOCOL_VERSION = 1;
-constexpr const uint32_t               KV_PROTOCOL_VERSION     = 1;
-constexpr const uint32_t               MAID_PROTOCOL_VERSION   = 1;
+constexpr const uint32_t                   TAVERN_PROTOCOL_VERSION = 1;
+constexpr const uint32_t                   KV_PROTOCOL_VERSION     = 1;
+constexpr const uint32_t                   MAID_PROTOCOL_VERSION   = 1;
 
-static SP<CCHpHyprtavernCoreV1Impl>    clientCoreImpl    = makeShared<CCHpHyprtavernCoreV1Impl>(TAVERN_PROTOCOL_VERSION);
-static SP<CCHpHyprtavernKvStoreV1Impl> clientKvImpl      = makeShared<CCHpHyprtavernKvStoreV1Impl>(KV_PROTOCOL_VERSION);
-static SP<CCHpHyprtavernBarmaidV1Impl> clientBarmaidImpl = makeShared<CCHpHyprtavernBarmaidV1Impl>(MAID_PROTOCOL_VERSION);
-static SP<CHpHyprtavernCoreV1Impl>     coreImpl;
-static uint32_t                        maxId = 1;
+static SP<CCHpHyprtavernCoreV1Impl>        clientCoreImpl    = makeShared<CCHpHyprtavernCoreV1Impl>(TAVERN_PROTOCOL_VERSION);
+static SP<CCHpHyprtavernKvStoreV1Impl>     clientKvImpl      = makeShared<CCHpHyprtavernKvStoreV1Impl>(KV_PROTOCOL_VERSION);
+static SP<CCHpHyprtavernBarmaidV1Impl>     clientBarmaidImpl = makeShared<CCHpHyprtavernBarmaidV1Impl>(MAID_PROTOCOL_VERSION);
+static SP<CHpHyprtavernCoreV1Impl>         coreImpl;
+static uint32_t                            maxId = 1;
+
+constexpr const std::array<const char*, 2> ENV_FREE_TO_UPDATE = {"WAYLAND_DISPLAY", "DISPLAY"};
 
 //
 
@@ -349,7 +351,10 @@ CCoreManagerObject::CCoreManagerObject(SP<CHpHyprtavernCoreManagerV1Object>&& ob
     });
 
     m_object->setUpdateTavernEnvironment([this](const std::vector<const char*>& names, const std::vector<const char*>& values) {
-        if (!hasPerm(HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_TYPE_MANAGEMENT_ENVIRONMENT)) {
+        const bool ANY_ENV_PROTECTED =
+            !std::ranges::all_of(names, [](const auto& name) { return std::ranges::any_of(ENV_FREE_TO_UPDATE, [&name](const auto& e) { return std::string_view{e} == name; }); });
+
+        if (ANY_ENV_PROTECTED && !hasPerm(HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_TYPE_MANAGEMENT_ENVIRONMENT)) {
             m_object->error(-1, "update_tavern_environment requires a management_environment permission");
             return;
         }

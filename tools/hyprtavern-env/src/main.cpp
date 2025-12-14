@@ -1,5 +1,6 @@
 #include <hyprwire/hyprwire.hpp>
 #include <print>
+#include <algorithm>
 #include <hp_hyprtavern_core_v1-client.hpp>
 #include <hp_hyprtavern_kv_store_v1-client.hpp>
 
@@ -29,6 +30,8 @@ static SP<CCHpHyprtavernCoreManagerV1Object>    manager;
 static SP<CCHpHyprtavernSecurityObjectV1Object> security;
 static SP<CCHpHyprtavernBusQueryV1Object>       query;
 static SP<Hyprwire::IClientSocket>              sock, kvSock;
+
+constexpr const std::array<const char*, 2>      ENV_FREE_TO_UPDATE = {"WAYLAND_DISPLAY", "DISPLAY"};
 
 static SP<CCHpHyprtavernKvStoreManagerV1Object> kvManager;
 
@@ -229,7 +232,9 @@ int main(int argc, const char** argv, char** envp) {
 
     manager = makeShared<CCHpHyprtavernCoreManagerV1Object>(sock->bindProtocol(impl->protocol(), PROTOCOL_VERSION));
 
-    if (!setupSecurityObject())
+    const bool ANY_ENV_PROTECTED = !std::ranges::all_of(state.envNames, [](const auto& name) { return std::ranges::contains(ENV_FREE_TO_UPDATE, name); });
+
+    if (ANY_ENV_PROTECTED && !setupSecurityObject())
         return 1;
 
     {
