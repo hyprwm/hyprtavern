@@ -113,6 +113,7 @@ target_include_directories(hyprtavern PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/proto
 target_link_libraries(hyprtavern PkgConfig::deps)
 
 add_subdirectory(tools/hyprtavern-spy)
+add_subdirectory(tools/hyprtavern-env)
 add_subdirectory(barmaids/hyprtavern-kv)
 
 install(TARGETS hyprtavern)

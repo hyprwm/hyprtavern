@@ -15,7 +15,19 @@ class CKvStore {
     CKvStore(CKvStore&)       = delete;
     CKvStore(CKvStore&&)      = delete;
 
-    std::future<bool>          init();
+    enum eKvStoreInitResult : uint8_t {
+        KV_STORE_INIT_UNKNOWN_ERROR = 0,
+        KV_STORE_INIT_OK,
+        KV_STORE_INIT_CANT_SHOW,
+    };
+
+    // runs async
+    void                       init();
+    bool                       isOpen();
+    bool                       isInitInProgress();
+
+    void                       onEvent();
+    void                       onEnvUpdate();
 
     void                       setGlobal(const std::string_view& key, const std::string_view& val);
     void                       setTavern(const std::string_view& key, const std::string_view& val);
@@ -26,8 +38,8 @@ class CKvStore {
     std::optional<std::string> getApp(const std::string_view& app, const std::string_view& key);
 
   private:
-    void saveToDisk();
-    bool loadFromDisk();
+    void               saveToDisk();
+    eKvStoreInitResult loadFromDisk();
 
     struct SKvEntry {
         std::string key;
@@ -45,8 +57,11 @@ class CKvStore {
         std::vector<SKvEntry> tavern;
     };
 
-    std::promise<bool> m_initPromise;
+    std::promise<eKvStoreInitResult> m_initPromise;
+    std::future<eKvStoreInitResult>  m_initFuture;
 
-    SKvStorage         m_storage;
-    std::string        m_password = "vaxwashere"; // default pass for no-pass kv stores
+    bool                             m_open = false;
+
+    SKvStorage                       m_storage;
+    std::string                      m_password = "vaxwashere"; // default pass for no-pass kv stores
 };

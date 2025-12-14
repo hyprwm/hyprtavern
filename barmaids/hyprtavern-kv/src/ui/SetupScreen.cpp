@@ -41,11 +41,15 @@ You can leave the password empty, which will disable encryption of your secrets.
 
 You can learn about the risks of doing that on the Hyprland wiki at wiki.hypr.land, in the Hyprland Ecosystem > hyprtavern > KV store section.)#";
 
-static std::string    run() {
+//
+static std::optional<std::string> run() {
     if (!backend)
         backend = IBackend::create();
 
     static std::string chosenPw = "";
+
+    if (!backend)
+        return std::nullopt;
 
     //
     const Vector2D WINDOW_SIZE = {600, 300};
@@ -89,16 +93,16 @@ static std::string    run() {
     std::vector<SP<CButtonElement>> buttons;
 
     buttons.emplace_back(CButtonBuilder::begin()
-                                ->label("Done")
-                                ->onMainClick([w = WP<IWindow>{window}](auto) {
+                             ->label("Done")
+                             ->onMainClick([w = WP<IWindow>{window}](auto) {
                                  chosenPw = state.textbox->currentText();
 
                                  if (w)
                                      w->close();
                                  backend->destroy();
                              })
-                                ->size({CDynamicSize::HT_SIZE_AUTO, CDynamicSize::HT_SIZE_AUTO, {1, 1}})
-                                ->commence());
+                             ->size({CDynamicSize::HT_SIZE_AUTO, CDynamicSize::HT_SIZE_AUTO, {1, 1}})
+                             ->commence());
 
     auto null2 = CNullBuilder::begin()->commence();
 
@@ -148,5 +152,8 @@ std::expected<std::string, std::string> GUI::firstTimeSetup() {
     state = {};
     backend.reset();
 
-    return RET;
+    if (RET)
+        return *RET;
+
+    return std::unexpected("could not open a window");
 }

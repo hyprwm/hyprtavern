@@ -35,17 +35,22 @@ static bool createNewSecurityObject(const std::string& token = "") {
     });
 
     std::optional<bool> permissionDone;
+    bool                unavailable = false;
 
     security->setPermissionResult([&permissionDone](uint32_t perm, uint32_t result) {
         permissionDone = result == HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_RESULT_GRANTED_BY_POLICY || result == HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_RESULT_GRANTED ||
             result == HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_RESULT_ALREADY_GRANTED;
     });
 
-    while (!permissionDone.has_value()) {
+    security->setUnavailable([&unavailable] { unavailable = true; });
+
+    while (!permissionDone.has_value() && !unavailable) {
         sock->dispatchEvents(true);
     }
 
-    if (!*permissionDone)
+    if (unavailable)
+        std::print("warning: permissions unavailable, results may be incomplete");
+    else if (!*permissionDone)
         std::print("warning: permission to monitor all objects was denied, results may be incomplete");
 
     return true;

@@ -108,6 +108,9 @@ CManagerObject::CManagerObject(SP<CHpHyprtavernKvStoreManagerV1Object> obj) : m_
             }
         }
     });
+
+    if (g_core->m_kv.isOpen())
+        sendOpen();
 }
 
 CManagerObject::~CManagerObject() {
@@ -165,6 +168,10 @@ void CManagerObject::getAppBinary() {
 
     if (res)
         m_appBinary = *res;
+}
+
+void CManagerObject::sendOpen() {
+    m_object->sendStoreAvailable();
 }
 
 bool CCore::init(int fd) {
@@ -245,34 +252,62 @@ bool CCore::init(int fd) {
             x->sendReady();
 
         x->setOnDestroy([this, w = WP<CHpHyprtavernBarmaidManagerV1Object>{x}] { std::erase(m_object.barmaidManagers, w); });
+        x->setUpdateTavernEnvironment([w = WP<CHpHyprtavernBarmaidManagerV1Object>{x}](const std::vector<const char*>& names, const std::vector<const char*>& values) {
+            if (names.size() != values.size()) {
+                w->error(-1, "update_tavern_environment with mismatched arrays");
+                return;
+            }
+
+            g_logger->log(LOG_DEBUG, "kv: updating environment with {} new values", names.size());
+
+            for (size_t i = 0; i < names.size(); ++i) {
+                if (std::string_view{values[i]}.empty())
+                    unsetenv(names[i]);
+                else
+                    setenv(names[i], values[i], true);
+            }
+        });
     });
 
     m_object.socket->addImplementation(kvImpl);
     m_object.socket->addImplementation(barmaidImpl);
 
-    auto future = m_kv.init();
+    int fds[2];
+    pipe(fds);
 
-    while (true) {
-        // TODO: some poll()? will be more loc... I should write a hu helper.
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        m_object.socket->dispatchEvents();
-        m_tavern.socket->dispatchEvents();
-
-        if (future.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
-            break;
-    }
-
-    if (!future.get())
-        return false;
+    m_kvEventWrite = Hyprutils::OS::CFileDescriptor{fds[1]};
+    m_kvEvent      = Hyprutils::OS::CFileDescriptor{fds[0]};
 
     g_logger->log(LOG_DEBUG, "kv: ready!");
     sendReady();
 
+    // init kv in the meantime if we can
+    m_kv.init();
+
     return true;
 }
 
+void CCore::drainFd(Hyprutils::OS::CFileDescriptor& fd) {
+    char   buf[128];
+    pollfd pfd = {
+        .fd     = fd.get(),
+        .events = POLLIN,
+    };
+
+    while (fd.isValid()) {
+        poll(&pfd, 1, 0);
+
+        if (pfd.revents & POLLIN) {
+            read(fd.get(), buf, 127);
+            continue;
+        }
+
+        break;
+    }
+}
+
 void CCore::run() {
-    pollfd fds[2] = {
+    pollfd fds[3] = {
         pollfd{
             .fd     = m_tavern.socket->extractLoopFD(),
             .events = POLLIN,
@@ -281,10 +316,14 @@ void CCore::run() {
             .fd     = m_object.socket->extractLoopFD(),
             .events = POLLIN,
         },
+        pollfd{
+            .fd     = m_kvEvent.get(),
+            .events = POLLIN,
+        },
     };
 
     while (true) {
-        if (poll(fds, 2, -1) < 0) {
+        if (poll(fds, 3, -1) < 0) {
             g_logger->log(LOG_ERR, "poll() failed");
             return;
         }
@@ -293,6 +332,10 @@ void CCore::run() {
             m_tavern.socket->dispatchEvents();
         if (fds[1].revents & POLLIN)
             m_object.socket->dispatchEvents();
+        if (fds[2].revents & POLLIN) {
+            m_kv.onEvent();
+            drainFd(m_kvEvent);
+        }
 
         if (fds[0].revents & POLLHUP) {
             g_logger->log(LOG_ERR, "client socket fd died");
@@ -303,6 +346,12 @@ void CCore::run() {
             g_logger->log(LOG_ERR, "servur socket fd died");
             return;
         }
+    }
+}
+
+void CCore::sendKvOpen() {
+    for (const auto& m : m_object.managers) {
+        m->sendOpen();
     }
 }
 

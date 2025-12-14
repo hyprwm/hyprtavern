@@ -8,6 +8,8 @@
 #include <hp_hyprtavern_kv_store_v1-server.hpp>
 #include <hp_hyprtavern_barmaid_v1-server.hpp>
 
+#include <hyprutils/os/FileDescriptor.hpp>
+
 struct SPermData {
     WP<Hyprwire::IServerClient> client;
     std::string                 tokenUsed;
@@ -18,6 +20,8 @@ class CManagerObject {
   public:
     CManagerObject(SP<CHpHyprtavernKvStoreManagerV1Object> obj);
     ~CManagerObject();
+
+    void sendOpen();
 
   private:
     void                                    getAppBinary();
@@ -39,13 +43,19 @@ class CCore {
     CCore(CCore&)       = delete;
     CCore(CCore&&)      = delete;
 
-    bool init(int fd);
-    void run();
+    bool                           init(int fd);
+    void                           run();
 
-    void removeObject(CManagerObject*);
+    void                           removeObject(CManagerObject*);
+    void                           sendKvOpen();
+
+    std::future<bool>&             initFuture();
+
+    Hyprutils::OS::CFileDescriptor m_kvEvent, m_kvEventWrite;
 
   private:
     void sendReady();
+    void drainFd(Hyprutils::OS::CFileDescriptor& fd);
 
     struct {
         SP<Hyprwire::IClientSocket>           socket;

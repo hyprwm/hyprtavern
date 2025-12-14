@@ -1,4 +1,5 @@
 #include "Kv.hpp"
+#include "Core.hpp"
 
 #include "../helpers/Logger.hpp"
 #include "../ui/GUI.hpp"
@@ -18,15 +19,15 @@ constexpr const char* KV_STORE_FILE_NAME   = "hyprtavern-kv.dat";
 constexpr const char* TAVERN_DATA_DIR_NAME = "hyprtavern";
 
 //
-std::future<bool> CKvStore::init() {
-
-    auto        future = m_initPromise.get_future();
+void CKvStore::init() {
+    m_initPromise = {};
+    m_initFuture  = m_initPromise.get_future();
     std::thread t([this] {
         static const auto HOME = getenv("HOME");
 
         if (!HOME) {
             g_logger->log(LOG_ERR, "Can't create kv store: no $HOME");
-            m_initPromise.set_value(false);
+            m_initPromise.set_value(KV_STORE_INIT_CANT_SHOW);
             return;
         }
 
@@ -41,20 +42,50 @@ std::future<bool> CKvStore::init() {
 
             if (ec) {
                 g_logger->log(LOG_ERR, "failed to create store dir at {}.", DIR_PATH.string());
-                m_initPromise.set_value(false);
+                m_initPromise.set_value(KV_STORE_INIT_UNKNOWN_ERROR);
                 return;
             }
         }
 
-        loadFromDisk();
+        auto ret = loadFromDisk();
+        m_initPromise.set_value(ret);
+        if (ret == KV_STORE_INIT_OK)
+            m_open = true;
 
-        m_initPromise.set_value(true);
+        // wake up the main thread
+        write(g_core->m_kvEventWrite.get(), "x", 1);
         return;
     });
 
     t.detach();
+}
 
-    return future;
+bool CKvStore::isOpen() {
+    return m_open;
+}
+
+bool CKvStore::isInitInProgress() {
+    return m_initFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+}
+
+void CKvStore::onEvent() {
+    if (m_open) {
+        // wee, we opened, send that we are open to everyone.
+        g_core->sendKvOpen();
+        return;
+    }
+
+    // we did not open, oh noes...
+    // something will pick this up later, like an env update.
+}
+
+void CKvStore::onEnvUpdate() {
+    if (m_open)
+        return;
+
+    g_logger->log(LOG_DEBUG, "kv: env updated, let's retry opening store");
+
+    init();
 }
 
 void CKvStore::setGlobal(const std::string_view& key, const std::string_view& val) {
@@ -156,31 +187,29 @@ void CKvStore::saveToDisk() {
         g_logger->log(LOG_ERR, "failed to store kv data on disk");
 }
 
-bool CKvStore::loadFromDisk() {
+CKvStore::eKvStoreInitResult CKvStore::loadFromDisk() {
     static const auto HOME = getenv("HOME");
     const auto        PATH = std::filesystem::path{HOME} / ".local" / "share" / TAVERN_DATA_DIR_NAME / KV_STORE_FILE_NAME;
 
     std::error_code   ec;
 
-    auto              firstTimeSetup = [this] {
+    auto              firstTimeSetup = [this] -> eKvStoreInitResult {
         g_logger->log(LOG_ERR, "kv store missing/corrupt: creating one");
 
         auto ret = GUI::firstTimeSetup();
 
-        if (!ret) {
-            g_logger->log(LOG_ERR, "failed to open gui??");
-            return;
-        }
+        if (!ret)
+            return KV_STORE_INIT_CANT_SHOW;
 
         m_password = ret.value();
 
         saveToDisk();
+
+        return KV_STORE_INIT_OK;
     };
 
-    if (!std::filesystem::exists(PATH, ec) || ec) {
-        firstTimeSetup();
-        return true;
-    }
+    if (!std::filesystem::exists(PATH, ec) || ec)
+        return firstTimeSetup();
 
     // ask for password if necessary. Try our default one first for no-pass logins
 
@@ -189,10 +218,8 @@ bool CKvStore::loadFromDisk() {
     while (blob.result() == Crypto::CRYPTO_RESULT_BAD_PW) {
         auto ret = GUI::passwordAsk();
 
-        if (!ret) {
-            g_logger->log(LOG_DEBUG, "kv store: passwordAsk bad ret {}", ret.error());
-            break;
-        }
+        if (!ret)
+            return KV_STORE_INIT_CANT_SHOW;
 
         m_password = ret.value();
 
@@ -208,20 +235,18 @@ bool CKvStore::loadFromDisk() {
 
     if (blob.result() != Crypto::CRYPTO_RESULT_OK) {
         g_logger->log(LOG_ERR, "kv store corrupt: bad content, status {}, recreating one", sc<uint32_t>(blob.result()));
-        firstTimeSetup();
-        return true;
+        return firstTimeSetup();
     }
 
     auto json = glz::read_json<SKvStorage>(blob.data());
 
     if (!json) {
         g_logger->log(LOG_ERR, "kv store corrupt: bad content, recreating one.");
-        firstTimeSetup();
-        return true;
+        return firstTimeSetup();
     }
 
     m_storage = *json;
 
     g_logger->log(LOG_DEBUG, "loaded kv store");
-    return true;
+    return KV_STORE_INIT_OK;
 }

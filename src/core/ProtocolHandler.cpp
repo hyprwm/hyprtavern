@@ -323,6 +323,11 @@ CCoreManagerObject::CCoreManagerObject(SP<CHpHyprtavernCoreManagerV1Object>&& ob
     });
 
     m_object->setGetSecurityObject([this](uint32_t seq, const char* token) {
+        if (m_security) {
+            m_object->error(-1, "manager already has a security object");
+            return;
+        }
+
         auto x = g_coreProto->m_securityObjects.emplace_back( //
             makeShared<CSecurityObject>(                      //
                 makeShared<CHpHyprtavernSecurityObjectV1Object>(
@@ -330,6 +335,8 @@ CCoreManagerObject::CCoreManagerObject(SP<CHpHyprtavernCoreManagerV1Object>&& ob
                 m_self.lock(),                                                                                                                           //
                 token                                                                                                                                    //
                 ));
+
+        m_security = x;
     });
 
     m_object->setGetSecurityResponse([this](uint32_t seq, const char* token) {
@@ -340,6 +347,44 @@ CCoreManagerObject::CCoreManagerObject(SP<CHpHyprtavernCoreManagerV1Object>&& ob
                 token                                                                                                                                      //
                 ));
     });
+
+    m_object->setUpdateTavernEnvironment([this](const std::vector<const char*>& names, const std::vector<const char*>& values) {
+        if (!hasPerm(HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_TYPE_MANAGEMENT_ENVIRONMENT)) {
+            m_object->error(-1, "update_tavern_environment requires a management_environment permission");
+            return;
+        }
+
+        if (names.size() != values.size()) {
+            m_object->error(-1, "update_tavern_environment with mismatched arrays");
+            return;
+        }
+
+        g_logger->log(LOG_DEBUG, "updating environment: {} new values", names.size());
+
+        // update barmaids
+        g_coreProto->m_client.kvBarmaidManager->sendUpdateTavernEnvironment(names, values);
+
+        // update ourselves
+        for (size_t i = 0; i < names.size(); ++i) {
+            if (std::string_view{values[i]}.empty())
+                unsetenv(names[i]);
+            else
+                setenv(names[i], values[i], true);
+        }
+    });
+}
+
+bool CCoreManagerObject::hasPerm(hpHyprtavernCoreV1SecurityPermissionType type) {
+    if (!m_security)
+        return false;
+
+    if (std::ranges::contains(m_security->m_sessionPerms, type))
+        return true;
+
+    if (std::ranges::contains(m_security->m_kvData.persistentPerms, type))
+        return true;
+
+    return false;
 }
 
 CSecurityObject::CSecurityObject(SP<CHpHyprtavernSecurityObjectV1Object>&& obj, SP<CCoreManagerObject> manager, const std::string& token) :
@@ -349,6 +394,11 @@ CSecurityObject::CSecurityObject(SP<CHpHyprtavernSecurityObjectV1Object>&& obj, 
 
     m_object->setOnDestroy([this]() { g_coreProto->removeObject(this); });
     m_object->setDestroy([this]() { g_coreProto->removeObject(this); });
+
+    if (!g_coreProto->m_client.kvOpen) {
+        m_object->sendUnavailable();
+        return;
+    }
 
     m_object->setSetIdentity([this](const char* name, const char* desc) {
         m_name        = name;
@@ -610,6 +660,7 @@ bool CCoreProtocolHandler::initBarmaids() {
     bool maidReady = false;
 
     m_client.kvBarmaidManager->setReady([&maidReady] { maidReady = true; });
+    m_client.kvManager->setStoreAvailable([this] { m_client.kvOpen = true; });
 
     while (true) {
         if (!m_client.kvSock->dispatchEvents(true)) {

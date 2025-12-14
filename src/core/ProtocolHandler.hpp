@@ -18,6 +18,8 @@ struct SPersistenceTokenKvData {
     std::vector<uint32_t> persistentPerms;
 };
 
+class CSecurityObject;
+
 class CBusQuery {
   public:
     CBusQuery(SP<CHpHyprtavernBusQueryV1Object>&& obj, SQueryData&& data);
@@ -61,9 +63,12 @@ class CCoreManagerObject {
     std::string            m_associatedSecurityToken;
 
     WP<CCoreManagerObject> m_self;
+    WP<CSecurityObject>    m_security;
 
   private:
     SP<CHpHyprtavernCoreManagerV1Object> m_object;
+
+    bool                                 hasPerm(hpHyprtavernCoreV1SecurityPermissionType type);
 };
 
 class CSecurityObject {
@@ -138,6 +143,7 @@ class CCoreProtocolHandler {
 
         SP<CCHpHyprtavernKvStoreManagerV1Object> kvManager;
         SP<CCHpHyprtavernBarmaidManagerV1Object> kvBarmaidManager;
+        bool                                     kvOpen = false;
         WP<Hyprwire::IServerClient>              wireClient;
     } m_client;
 
