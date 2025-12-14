@@ -59,7 +59,12 @@ CServerHandler::CServerHandler() {
         return;
     }
 
-    m_socket = Hyprwire::IServerSocket::open((std::filesystem::path(RUNTIME_DIR) / "hyprtavern" / SOCKET_FILE_NAME).string());
+    const auto      SOCK_PATH = std::filesystem::path(RUNTIME_DIR) / "hyprtavern" / SOCKET_FILE_NAME;
+
+    std::error_code ec;
+    std::filesystem::remove(SOCK_PATH, ec);
+
+    m_socket = Hyprwire::IServerSocket::open(SOCK_PATH.string());
 
     if (!m_socket) {
         g_logger->log(LOG_ERR, "refusing to run: failed to open a socket");
