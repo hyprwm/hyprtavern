@@ -280,6 +280,9 @@ bool CCore::init(int fd) {
     m_kvEventWrite = Hyprutils::OS::CFileDescriptor{fds[1]};
     m_kvEvent      = Hyprutils::OS::CFileDescriptor{fds[0]};
 
+    m_kvEvent.setFlags(O_CLOEXEC);
+    m_kvEventWrite.setFlags(O_CLOEXEC);
+
     g_logger->log(LOG_DEBUG, "kv: ready!");
     sendReady();
 
