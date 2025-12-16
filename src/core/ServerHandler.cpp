@@ -122,10 +122,15 @@ bool CServerHandler::run() {
         if (fds[1].revents & POLLIN)
             g_coreProto->m_client.kvSock->dispatchEvents();
 
+        std::jthread barmaidInitThread;
+
         if (!barmaidInitCommenced && g_coreProto->m_managers.size() >= 1 /* kv_store */) {
             barmaidInitCommenced = true;
-            std::thread t([&barmaidInitResult] { barmaidInitResult.set_value(g_coreProto->initBarmaids()); });
-            t.detach();
+
+            barmaidInitThread = std::jthread([this](std::stop_token st) {
+                bool ok = g_coreProto->initBarmaids();
+                barmaidInitResult.set_value(ok);
+            });
         }
 
         if (!barmaidInitDone && barmaidInitFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
