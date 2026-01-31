@@ -33,3 +33,6 @@ tools/hyprtavern-env/protocols/*.hpp
 
 barmaids/hyprtavern-kv/protocols/*.cpp
 barmaids/hyprtavern-kv/protocols/*.hpp
+
+barmaids/hyprtavern-perm-daemon/protocols/*.cpp
+barmaids/hyprtavern-perm-daemon/protocols/*.hpp

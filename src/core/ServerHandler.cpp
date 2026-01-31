@@ -94,10 +94,13 @@ bool CServerHandler::run() {
         return false;
     }
 
-    pollfd fds[2] = {
+    pollfd fds[3] = {
         pollfd{
             .fd     = m_socket->extractLoopFD(),
             .events = POLLIN,
+        },
+        pollfd{
+            .revents = 0,
         },
         pollfd{
             .revents = 0,
@@ -109,7 +112,7 @@ bool CServerHandler::run() {
     std::future<bool>  barmaidInitFuture = barmaidInitResult.get_future();
 
     while (!m_exit) {
-        if (poll(fds, barmaidInitDone ? 2 : 1, -1) < 0) {
+        if (poll(fds, barmaidInitDone ? 3 : 1, -1) < 0) {
             g_logger->log(LOG_ERR, "poll() failed");
             exit();
             return false;
@@ -121,8 +124,11 @@ bool CServerHandler::run() {
             m_socket->dispatchEvents();
         if (fds[1].revents & POLLIN)
             g_coreProto->m_client.kvSock->dispatchEvents();
+        if (fds[2].revents & POLLIN)
+            g_coreProto->m_client.pdSock->dispatchEvents();
 
-        if (!barmaidInitCommenced && g_coreProto->m_managers.size() >= 1 /* kv_store */) {
+        // TODO: this should be done better
+        if (!barmaidInitCommenced && g_coreProto->m_managers.size() >= 2 /* kv_store and pd */) {
             barmaidInitCommenced = true;
             std::thread t([&barmaidInitResult] { barmaidInitResult.set_value(g_coreProto->initBarmaids()); });
             t.detach();
@@ -138,6 +144,9 @@ bool CServerHandler::run() {
 
             fds[1].fd     = g_coreProto->m_client.kvSock->extractLoopFD();
             fds[1].events = POLLIN;
+
+            fds[2].fd     = g_coreProto->m_client.pdSock->extractLoopFD();
+            fds[2].events = POLLIN;
         }
 
         if (fds[0].revents & POLLHUP) {
@@ -146,7 +155,13 @@ bool CServerHandler::run() {
         }
 
         if (fds[1].revents & POLLHUP) {
-            g_logger->log(LOG_ERR, "tavernkeep fd died");
+            g_logger->log(LOG_ERR, "kv fd died");
+            exit();
+            return false;
+        }
+
+        if (fds[2].revents & POLLHUP) {
+            g_logger->log(LOG_ERR, "pd fd died");
             exit();
             return false;
         }
@@ -271,22 +286,54 @@ static bool isRunning(pid_t pid) {
 }
 
 bool CServerHandler::launchBarmaids() {
-    int fds[2];
-    if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) < 0) {
-        g_logger->log(LOG_ERR, "failed to create a socketpair");
-        return false;
+
+    // ----------------- KV ----------------- //
+    {
+        int fds[2];
+        if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) < 0) {
+            g_logger->log(LOG_ERR, "failed to create a socketpair");
+            return false;
+        }
+
+        fcntl(fds[0], F_SETFD, FD_CLOEXEC);
+
+        auto pid = launch("hyprtavern-kv", {"--fd", std::format("{}", fds[1])});
+
+        close(fds[1]);
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+        if (!isRunning(pid))
+            return false;
+
+        m_socket->addClient(fds[0]);
+
+        g_logger->log(LOG_DEBUG, "hyprtavern-kv started");
     }
 
-    fcntl(fds[0], F_SETFD, FD_CLOEXEC);
+    // ----------------- PD ----------------- //
+    {
+        int fds[2];
+        if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) < 0) {
+            g_logger->log(LOG_ERR, "failed to create a socketpair");
+            return false;
+        }
 
-    auto pid = launch("hyprtavern-kv", {"--fd", std::format("{}", fds[1])});
+        fcntl(fds[0], F_SETFD, FD_CLOEXEC);
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        auto pid = launch("hyprtavern-perm-daemon", {"--fd", std::format("{}", fds[1])});
 
-    if (!isRunning(pid))
-        return false;
+        close(fds[1]);
 
-    m_socket->addClient(fds[0]);
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+        if (!isRunning(pid))
+            return false;
+
+        m_socket->addClient(fds[0]);
+
+        g_logger->log(LOG_DEBUG, "hyprtavern-pd started");
+    }
 
     return true;
 }

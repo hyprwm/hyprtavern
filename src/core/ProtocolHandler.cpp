@@ -6,22 +6,27 @@
 #include <random>
 #include <limits>
 
+#include <hyprutils/utils/ScopeGuard.hpp>
+using namespace Hyprutils::Utils;
+
 #include <sys/socket.h>
 #include <sys/poll.h>
 #include <uuid.h>
 #include <glaze/glaze.hpp>
 
-constexpr const uint32_t                   TAVERN_PROTOCOL_VERSION = 1;
-constexpr const uint32_t                   KV_PROTOCOL_VERSION     = 1;
-constexpr const uint32_t                   MAID_PROTOCOL_VERSION   = 1;
+constexpr const uint32_t                                TAVERN_PROTOCOL_VERSION = 1;
+constexpr const uint32_t                                KV_PROTOCOL_VERSION     = 1;
+constexpr const uint32_t                                PD_PROTOCOL_VERSION     = 1;
+constexpr const uint32_t                                MAID_PROTOCOL_VERSION   = 1;
 
-static SP<CCHpHyprtavernCoreV1Impl>        clientCoreImpl    = makeShared<CCHpHyprtavernCoreV1Impl>(TAVERN_PROTOCOL_VERSION);
-static SP<CCHpHyprtavernKvStoreV1Impl>     clientKvImpl      = makeShared<CCHpHyprtavernKvStoreV1Impl>(KV_PROTOCOL_VERSION);
-static SP<CCHpHyprtavernBarmaidV1Impl>     clientBarmaidImpl = makeShared<CCHpHyprtavernBarmaidV1Impl>(MAID_PROTOCOL_VERSION);
-static SP<CHpHyprtavernCoreV1Impl>         coreImpl;
-static uint32_t                            maxId = 1;
+static SP<CCHpHyprtavernCoreV1Impl>                     clientCoreImpl    = makeShared<CCHpHyprtavernCoreV1Impl>(TAVERN_PROTOCOL_VERSION);
+static SP<CCHpHyprtavernKvStoreV1Impl>                  clientKvImpl      = makeShared<CCHpHyprtavernKvStoreV1Impl>(KV_PROTOCOL_VERSION);
+static SP<CCHpHyprtavernPermissionAuthenticationV1Impl> clientPdImpl      = makeShared<CCHpHyprtavernPermissionAuthenticationV1Impl>(PD_PROTOCOL_VERSION);
+static SP<CCHpHyprtavernBarmaidV1Impl>                  clientBarmaidImpl = makeShared<CCHpHyprtavernBarmaidV1Impl>(MAID_PROTOCOL_VERSION);
+static SP<CHpHyprtavernCoreV1Impl>                      coreImpl;
+static uint32_t                                         maxId = 1;
 
-constexpr const std::array<const char*, 2> ENV_FREE_TO_UPDATE = {"WAYLAND_DISPLAY", "DISPLAY"};
+constexpr const std::array<const char*, 2>              ENV_FREE_TO_UPDATE = {"WAYLAND_DISPLAY", "DISPLAY"};
 
 //
 
@@ -339,6 +344,7 @@ CCoreManagerObject::CCoreManagerObject(SP<CHpHyprtavernCoreManagerV1Object>&& ob
                 ));
 
         m_security = x;
+        x->m_self  = x;
     });
 
     m_object->setGetSecurityResponse([this](uint32_t seq, const char* token) {
@@ -411,15 +417,41 @@ CSecurityObject::CSecurityObject(SP<CHpHyprtavernSecurityObjectV1Object>&& obj, 
     });
 
     m_object->setObtainPermission([this](hpHyprtavernCoreV1SecurityPermissionType type, hpHyprtavernCoreV1SecurityPermissionMode mode) {
-        // FIXME: impl thsi!!!!!! aBwgcvfdtyfwefctywevtyfwecvtyfgecvtyfgwetyfgvh FYUCKCKCKCKCK FUCKER
+        auto object = g_coreProto->m_transactions.emplace_back(
+            makeShared<CCHpHyprtavernPermissionAuthenticationTransactionV1Object>(g_coreProto->m_client.pdManager->sendInitPermissionTransaction()));
 
-        g_logger->log(LOG_WARN, "FIXME: obtain_permission is not impl'd I am a lazy fuck!");
+        object->sendSetAppName(m_name.c_str());
+        object->sendSetAppIdentifier("TODO" /* FIXME: */);
+        object->sendAskPermission(type, sc<hpHyprtavernPermissionAuthenticationV1AskType>(mode));
 
-        m_sessionPerms.emplace_back(type);
+        object->setPermissionResult([this, w = WP<CSecurityObject>{m_self}, object](uint32_t perm, uint32_t result) {
+            CScopeGuard x([&object] {
+                object->sendDestroy();
+                std::erase(g_coreProto->m_transactions, object);
+            });
 
-        m_object->sendPermissionResult(type, HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_RESULT_GRANTED_BY_POLICY);
+            if (!w)
+                return;
 
-        // FIXME: send to kv persistent perms
+            if (result == HP_HYPRTAVERN_PERMISSION_AUTHENTICATION_V1_RESPONSE_TYPE_DENIED) {
+                m_object->sendPermissionResult(perm, HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_RESULT_DENIED);
+                return;
+            }
+
+            if (result == HP_HYPRTAVERN_PERMISSION_AUTHENTICATION_V1_RESPONSE_TYPE_UNAVAILABLE) {
+                m_object->sendPermissionResult(perm, HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_RESULT_FAILED);
+                return;
+            }
+
+            m_object->sendPermissionResult(perm, HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_RESULT_GRANTED);
+            m_sessionPerms.emplace_back(perm);
+
+            g_logger->log(LOG_WARN, "FIXME: obtain_permission persistence is not impl'd I am a lazy fuck!");
+
+            // FIXME: send to kv persistent perms
+
+            return;
+        });
     });
 
     if (!token.empty()) {
@@ -606,9 +638,9 @@ std::string CCoreProtocolHandler::generateToken() {
     return uuid;
 }
 
-bool CCoreProtocolHandler::initBarmaids() {
+bool CCoreProtocolHandler::initKv() {
     if (!m_client.sock->waitForHandshake()) {
-        g_logger->log(LOG_ERR, "CCoreProtocolHandler::initBarmaids: tavern handshake failed");
+        g_logger->log(LOG_ERR, "CCoreProtocolHandler::initKv: tavern handshake failed");
         return false;
     }
 
@@ -617,7 +649,7 @@ bool CCoreProtocolHandler::initBarmaids() {
     const auto SPEC = m_client.sock->getSpec(clientCoreImpl->protocol()->specName());
 
     if (!SPEC) {
-        g_logger->log(LOG_ERR, "CCoreProtocolHandler::initBarmaids: failed because tavern doesn't support tavern proto??");
+        g_logger->log(LOG_ERR, "CCoreProtocolHandler::initKv: failed because tavern doesn't support tavern proto??");
         return false;
     }
 
@@ -630,6 +662,8 @@ bool CCoreProtocolHandler::initBarmaids() {
     int fd = -1;
 
     query->setResults([this, &manager, &fd](const std::vector<uint32_t>& res) {
+        g_logger->log(LOG_DEBUG, "CCoreProtocolHandler::initKv: got {} results for kv", res.size());
+
         if (res.empty())
             return;
 
@@ -643,14 +677,14 @@ bool CCoreProtocolHandler::initBarmaids() {
     m_client.sock->roundtrip();
 
     if (fd < 0) {
-        g_logger->log(LOG_ERR, "CCoreProtocolHandler::initBarmaids: failed cuz bus has no kv?");
+        g_logger->log(LOG_ERR, "CCoreProtocolHandler::initKv: failed cuz bus has no kv?");
         return false;
     }
 
     m_client.kvSock = Hyprwire::IClientSocket::open(fd);
 
     if (!m_client.kvSock->waitForHandshake()) {
-        g_logger->log(LOG_ERR, "CCoreProtocolHandler::initBarmaids: handshake failed");
+        g_logger->log(LOG_ERR, "CCoreProtocolHandler::initKv: handshake failed");
         return false;
     }
 
@@ -669,15 +703,96 @@ bool CCoreProtocolHandler::initBarmaids() {
 
     while (true) {
         if (!m_client.kvSock->dispatchEvents(true)) {
-            g_logger->log(LOG_ERR, "CCoreProtocolHandler::initBarmaids: failed, barmaid died");
+            g_logger->log(LOG_ERR, "CCoreProtocolHandler::initKv: failed, barmaid died");
             return false;
         }
 
         if (maidReady) {
-            g_logger->log(LOG_DEBUG, "CCoreProtocolHandler::initBarmaids: kv barmaid ready");
+            g_logger->log(LOG_DEBUG, "CCoreProtocolHandler::initKv: kv barmaid ready");
             break;
         }
     }
 
     return true;
+}
+
+bool CCoreProtocolHandler::initPd() {
+    if (!m_client.sock->waitForHandshake()) {
+        g_logger->log(LOG_ERR, "CCoreProtocolHandler::initPd: tavern handshake failed");
+        return false;
+    }
+
+    m_client.sock->addImplementation(clientCoreImpl);
+
+    const auto SPEC = m_client.sock->getSpec(clientCoreImpl->protocol()->specName());
+
+    if (!SPEC) {
+        g_logger->log(LOG_ERR, "CCoreProtocolHandler::initPd: failed because tavern doesn't support tavern proto??");
+        return false;
+    }
+
+    // get the handle
+    auto manager = makeShared<CCHpHyprtavernCoreManagerV1Object>(m_client.sock->bindProtocol(clientCoreImpl->protocol(), TAVERN_PROTOCOL_VERSION));
+
+    auto query = makeShared<CCHpHyprtavernBusQueryV1Object>(manager->sendGetQueryObject(
+        {"hp_hyprtavern_permission_authentication_v1"}, HP_HYPRTAVERN_CORE_V1_BUS_QUERY_FILTER_MODE_ALL, {}, HP_HYPRTAVERN_CORE_V1_BUS_QUERY_FILTER_MODE_ALL));
+
+    int  fd = -1;
+
+    query->setResults([this, &manager, &fd](const std::vector<uint32_t>& res) {
+        g_logger->log(LOG_DEBUG, "CCoreProtocolHandler::initPd: got {} results for pd", res.size());
+
+        if (res.empty())
+            return;
+
+        auto handle = makeShared<CCHpHyprtavernBusObjectHandleV1Object>(manager->sendGetObjectHandle(res[0]));
+        handle->setSocket([&fd](int connFd) { fd = connFd; });
+        handle->sendConnect();
+
+        m_client.sock->roundtrip();
+    });
+
+    m_client.sock->roundtrip();
+
+    if (fd < 0) {
+        g_logger->log(LOG_ERR, "CCoreProtocolHandler::initPd: failed cuz bus has no pd?");
+        return false;
+    }
+
+    m_client.pdSock = Hyprwire::IClientSocket::open(fd);
+
+    if (!m_client.pdSock->waitForHandshake()) {
+        g_logger->log(LOG_ERR, "CCoreProtocolHandler::initPd: handshake failed");
+        return false;
+    }
+
+    m_client.pdSock->addImplementation(clientPdImpl);
+    m_client.pdSock->addImplementation(clientBarmaidImpl);
+
+    // handshake is estabilished
+
+    m_client.pdManager        = makeShared<CCHpHyprtavernPermissionAuthenticationManagerV1Object>(m_client.pdSock->bindProtocol(clientPdImpl->protocol(), PD_PROTOCOL_VERSION));
+    m_client.pdBarmaidManager = makeShared<CCHpHyprtavernBarmaidManagerV1Object>(m_client.pdSock->bindProtocol(clientBarmaidImpl->protocol(), MAID_PROTOCOL_VERSION));
+
+    bool maidReady = false;
+
+    m_client.pdBarmaidManager->setReady([&maidReady] { maidReady = true; });
+
+    while (true) {
+        if (!m_client.pdSock->dispatchEvents(true)) {
+            g_logger->log(LOG_ERR, "CCoreProtocolHandler::initPd: failed, barmaid died");
+            return false;
+        }
+
+        if (maidReady) {
+            g_logger->log(LOG_DEBUG, "CCoreProtocolHandler::initPd: pd barmaid ready");
+            break;
+        }
+    }
+
+    return true;
+}
+
+bool CCoreProtocolHandler::initBarmaids() {
+    return initKv() && initPd();
 }

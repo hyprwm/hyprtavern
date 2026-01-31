@@ -4,6 +4,7 @@
 #include <hp_hyprtavern_core_v1-client.hpp>
 #include <hp_hyprtavern_kv_store_v1-client.hpp>
 #include <hp_hyprtavern_barmaid_v1-client.hpp>
+#include <hp_hyprtavern_permission_authentication_v1-client.hpp>
 
 #include "../helpers/Memory.hpp"
 
@@ -82,6 +83,8 @@ class CSecurityObject {
     std::vector<uint32_t>   m_sessionPerms;
     SPersistenceTokenKvData m_kvData;
 
+    WP<CSecurityObject>     m_self;
+
   private:
     SP<CHpHyprtavernSecurityObjectV1Object> m_object;
 };
@@ -116,6 +119,8 @@ class CCoreProtocolHandler {
 
     bool init(SP<Hyprwire::IServerSocket> sock);
     bool initBarmaids();
+    bool initKv();
+    bool initPd();
 
     //
     void removeObject(CCoreManagerObject* obj);
@@ -126,25 +131,29 @@ class CCoreProtocolHandler {
     void removeObject(CSecurityResponse* obj);
 
     //
-    std::vector<SP<CCoreManagerObject>> m_managers;
-    std::vector<SP<CBusObject>>         m_objects;
-    std::vector<SP<CBusObjectHandle>>   m_handles;
-    std::vector<SP<CBusQuery>>          m_queries;
-    std::vector<SP<CSecurityObject>>    m_securityObjects;
-    std::vector<SP<CSecurityResponse>>  m_securityResponses;
+    std::vector<SP<CCoreManagerObject>>                                        m_managers;
+    std::vector<SP<CBusObject>>                                                m_objects;
+    std::vector<SP<CBusObjectHandle>>                                          m_handles;
+    std::vector<SP<CBusQuery>>                                                 m_queries;
+    std::vector<SP<CSecurityObject>>                                           m_securityObjects;
+    std::vector<SP<CSecurityResponse>>                                         m_securityResponses;
+    std::vector<SP<CCHpHyprtavernPermissionAuthenticationTransactionV1Object>> m_transactions;
 
-    SP<CBusObject>                      fromID(uint32_t id);
+    SP<CBusObject>                                                             fromID(uint32_t id);
 
-    WP<Hyprwire::IServerSocket>         m_sock;
+    WP<Hyprwire::IServerSocket>                                                m_sock;
 
     struct {
-        SP<Hyprwire::IClientSocket>              sock;
-        SP<Hyprwire::IClientSocket>              kvSock;
+        SP<Hyprwire::IClientSocket>                               sock;
+        SP<Hyprwire::IClientSocket>                               kvSock;
+        SP<Hyprwire::IClientSocket>                               pdSock;
 
-        SP<CCHpHyprtavernKvStoreManagerV1Object> kvManager;
-        SP<CCHpHyprtavernBarmaidManagerV1Object> kvBarmaidManager;
-        bool                                     kvOpen = false;
-        WP<Hyprwire::IServerClient>              wireClient;
+        SP<CCHpHyprtavernKvStoreManagerV1Object>                  kvManager;
+        SP<CCHpHyprtavernBarmaidManagerV1Object>                  kvBarmaidManager;
+        SP<CCHpHyprtavernPermissionAuthenticationManagerV1Object> pdManager;
+        SP<CCHpHyprtavernBarmaidManagerV1Object>                  pdBarmaidManager;
+        bool                                                      kvOpen = false;
+        WP<Hyprwire::IServerClient>                               wireClient;
     } m_client;
 
     std::string                                  m_tavernkeepToken = "__tavernkeep__";
