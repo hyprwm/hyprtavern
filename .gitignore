@@ -36,3 +36,6 @@ barmaids/hyprtavern-kv/protocols/*.hpp
 
 barmaids/hyprtavern-perm-daemon/protocols/*.cpp
 barmaids/hyprtavern-perm-daemon/protocols/*.hpp
+
+.direnv/
+.envrc
