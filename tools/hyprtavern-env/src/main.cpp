@@ -4,6 +4,9 @@
 #include <hp_hyprtavern_core_v1-client.hpp>
 #include <hp_hyprtavern_kv_store_v1-client.hpp>
 
+#include <chrono>
+#include <thread>
+
 #include <hyprutils/cli/ArgumentParser.hpp>
 #include <hyprutils/string/VarList2.hpp>
 
@@ -48,6 +51,24 @@ struct SState {
 static SState state;
 
 //
+
+static bool waitForReady() {
+    bool ready = false;
+    manager->setReady([&ready] { ready = true; });
+
+    const auto started = std::chrono::steady_clock::now();
+    while (!ready && std::chrono::steady_clock::now() - started < std::chrono::seconds(10)) {
+        if (!sock->dispatchEvents(false))
+            return false;
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    if (!ready)
+        std::println("warning: timed out waiting for tavern ready event, continuing anyway");
+
+    return true;
+}
 
 static bool createNewSecurityObject(const std::string& token = "") {
     security = makeShared<CCHpHyprtavernSecurityObjectV1Object>(manager->sendGetSecurityObject(token.c_str()));
@@ -106,9 +127,10 @@ static bool setupSecurityObject() {
     if (objectId == 0)
         return createNewSecurityObject();
 
-    auto handle = makeShared<CCHpHyprtavernBusObjectHandleV1Object>(manager->sendGetObjectHandle(objectId));
+    auto       handle = makeShared<CCHpHyprtavernBusObjectHandleV1Object>(manager->sendGetObjectHandle(objectId));
 
-    handle->sendConnect();
+    const auto KV_PROTOCOL = kvImpl->protocol()->specName();
+    handle->sendConnect({KV_PROTOCOL.c_str()});
 
     int fd = -1;
 
@@ -231,6 +253,11 @@ int main(int argc, const char** argv, char** envp) {
     }
 
     manager = makeShared<CCHpHyprtavernCoreManagerV1Object>(sock->bindProtocol(impl->protocol(), PROTOCOL_VERSION));
+
+    if (!waitForReady()) {
+        std::println("err: failed waiting for tavern readiness");
+        return 1;
+    }
 
     const bool ANY_ENV_PROTECTED = !std::ranges::all_of(state.envNames, [](const auto& name) { return std::ranges::contains(ENV_FREE_TO_UPDATE, name); });
 

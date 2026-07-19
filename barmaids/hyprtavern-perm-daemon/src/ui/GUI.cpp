@@ -16,7 +16,7 @@ void GUI::updateEnv() {
 
     GUI::backend = Hyprtoolkit::IBackend::createWithData(data);
 
-    available = GUI::backend;
+    available = !!GUI::backend;
 
     g_core->updateAvailability(available);
 

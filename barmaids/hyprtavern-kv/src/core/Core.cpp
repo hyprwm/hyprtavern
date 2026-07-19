@@ -6,6 +6,7 @@
 #include <algorithm>
 
 #include <sys/poll.h>
+#include <unistd.h>
 
 #if defined(__DragonFly__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
 #include <sys/sysctl.h>
@@ -39,6 +40,10 @@ static SP<CCHpHyprtavernCoreV1Impl>   impl = makeShared<CCHpHyprtavernCoreV1Impl
 static SP<CHpHyprtavernBarmaidV1Impl> barmaidImpl;
 static SP<CHpHyprtavernKvStoreV1Impl> kvImpl;
 
+static bool                           hasTavernkeep(const std::vector<uint32_t>& perms) {
+    return std::ranges::contains(perms, HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_TYPE_TAVERNKEEP);
+}
+
 //
 CManagerObject::CManagerObject(SP<CHpHyprtavernKvStoreManagerV1Object> obj) : m_object(obj) {
     if (!m_object->getObject())
@@ -54,6 +59,11 @@ CManagerObject::CManagerObject(SP<CHpHyprtavernKvStoreManagerV1Object> obj) : m_
     getAppBinary();
 
     m_object->setSetValue([this](const char* key, const char* val, hpHyprtavernKvStoreV1ValueType type) {
+        if (!g_core->m_kv.isOpen()) {
+            m_object->error(HP_HYPRTAVERN_KV_STORE_V1_PROTOCOL_ERRORS_STORE_UNAVAILABLE, "Kv store is locked");
+            return;
+        }
+
         switch (type) {
             case HP_HYPRTAVERN_KV_STORE_V1_VALUE_TYPE_APP_VALUE: {
                 g_core->m_kv.setApp(m_appBinary, key, val);
@@ -64,7 +74,7 @@ CManagerObject::CManagerObject(SP<CHpHyprtavernKvStoreManagerV1Object> obj) : m_
                 break;
             }
             case HP_HYPRTAVERN_KV_STORE_V1_VALUE_TYPE_TAVERN_VALUE: {
-                if (!std::ranges::contains(m_perms.permissions, HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_TYPE_TAVERNKEEP)) {
+                if (!hasTavernkeep(m_perms.permissions)) {
                     m_object->error(-1, "Insufficient permissions to call set_value with tavern");
                     return;
                 }
@@ -76,6 +86,11 @@ CManagerObject::CManagerObject(SP<CHpHyprtavernKvStoreManagerV1Object> obj) : m_
     });
 
     m_object->setGetValue([this](const char* key, hpHyprtavernKvStoreV1ValueType type) {
+        if (!g_core->m_kv.isOpen()) {
+            m_object->error(HP_HYPRTAVERN_KV_STORE_V1_PROTOCOL_ERRORS_STORE_UNAVAILABLE, "Kv store is locked");
+            return;
+        }
+
         switch (type) {
             case HP_HYPRTAVERN_KV_STORE_V1_VALUE_TYPE_APP_VALUE: {
                 auto ret = g_core->m_kv.getApp(m_appBinary, key);
@@ -94,7 +109,7 @@ CManagerObject::CManagerObject(SP<CHpHyprtavernKvStoreManagerV1Object> obj) : m_
                 break;
             }
             case HP_HYPRTAVERN_KV_STORE_V1_VALUE_TYPE_TAVERN_VALUE: {
-                if (!std::ranges::contains(m_perms.permissions, HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_TYPE_TAVERNKEEP)) {
+                if (!hasTavernkeep(m_perms.permissions)) {
                     m_object->error(-1, "Insufficient permissions to call set_value with tavern");
                     return;
                 }
@@ -203,18 +218,26 @@ bool CCore::init(int fd) {
     m_tavern.busObject = makeShared<CCHpHyprtavernBusObjectV1Object>(m_tavern.manager->sendGetBusObject("hyprtavern-kv"));
 
     m_tavern.busObject->sendExposeProtocol("hp_hyprtavern_kv_store_v1", KV_PROTOCOL_VERSION, {}, 1);
-    m_tavern.busObject->sendExposeProtocol("hp_hyprtavern_barmaid_v1", MAID_PROTOCOL_VERSION, {HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_TYPE_TAVERNKEEP}, 1);
+    m_tavern.busObject->sendExposeProtocol("hp_hyprtavern_barmaid_v1", MAID_PROTOCOL_VERSION, {HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_TYPE_TAVERNKEEP}, 0);
 
     static bool failedToExpose = false;
 
     m_tavern.busObject->setExposeProtocolError([](uint32_t err) { failedToExpose = true; });
-    m_tavern.busObject->setNewFd([this](int fd, const char* token) {
+    m_tavern.busObject->setNewFd([this](int fd, const char* token, const std::vector<const char*>& protocolScope) {
         auto x = m_object.socket->addClient(fd);
 
         if (!x) {
             g_logger->log(LOG_ERR, "failed to connect client new fd {}", fd);
             return;
         }
+
+        std::vector<std::string> scope;
+        scope.reserve(protocolScope.size());
+        for (const auto& p : protocolScope) {
+            scope.emplace_back(p);
+        }
+
+        x->setProtocolFilter([scope = std::move(scope)](std::string_view protocol) { return std::ranges::any_of(scope, [protocol](const auto& p) { return p == protocol; }); });
 
         auto permData       = permDataFor(x);
         permData->tokenUsed = token;
@@ -223,7 +246,7 @@ bool CCore::init(int fd) {
             // get the perms from the bus
             auto response = makeShared<CCHpHyprtavernSecurityResponseV1Object>(m_tavern.manager->sendGetSecurityResponse(token));
 
-            response->setPermissions([&permData, fd](const std::vector<uint32_t>& perms) {
+            response->setPermissions([permData, fd](const std::vector<uint32_t>& perms) {
                 g_logger->log(LOG_DEBUG, "incoming fd {} has {} perms", fd, perms.size());
                 permData->permissions = perms;
             });
@@ -247,7 +270,15 @@ bool CCore::init(int fd) {
     });
 
     barmaidImpl = makeShared<CHpHyprtavernBarmaidV1Impl>(1, [this](SP<Hyprwire::IObject> obj) {
-        auto x = m_object.barmaidManagers.emplace_back(makeShared<CHpHyprtavernBarmaidManagerV1Object>(std::move(obj))); //
+        auto manager = makeShared<CHpHyprtavernBarmaidManagerV1Object>(std::move(obj));
+        auto perms   = permDataFor(manager->getObject()->client());
+
+        if (!perms || !hasTavernkeep(perms->permissions)) {
+            manager->error(-1, "barmaid protocol requires tavernkeep");
+            return;
+        }
+
+        auto x = m_object.barmaidManagers.emplace_back(manager); //
         if (m_object.ready)
             x->sendReady();
 
@@ -333,22 +364,37 @@ void CCore::run() {
             return;
         }
 
-        if (fds[0].revents & POLLIN)
-            m_tavern.socket->dispatchEvents();
-        if (fds[1].revents & POLLIN)
-            m_object.socket->dispatchEvents();
+        if (fds[0].revents & POLLIN) {
+            if (!m_tavern.socket->dispatchEvents()) {
+                g_logger->log(LOG_ERR, "client socket fd dispatch failed");
+                return;
+            }
+        }
+
+        if (fds[1].revents & POLLIN) {
+            if (!m_object.socket->dispatchEvents()) {
+                g_logger->log(LOG_ERR, "servur socket fd dispatch failed");
+                return;
+            }
+        }
+
         if (fds[2].revents & POLLIN) {
             m_kv.onEvent();
             drainFd(m_kvEvent);
         }
 
-        if (fds[0].revents & POLLHUP) {
+        if (fds[0].revents & (POLLHUP | POLLERR | POLLNVAL)) {
             g_logger->log(LOG_ERR, "client socket fd died");
             return;
         }
 
-        if (fds[1].revents & POLLHUP) {
+        if (fds[1].revents & (POLLHUP | POLLERR | POLLNVAL)) {
             g_logger->log(LOG_ERR, "servur socket fd died");
+            return;
+        }
+
+        if (fds[2].revents & (POLLERR | POLLNVAL)) {
+            g_logger->log(LOG_ERR, "kv event fd died");
             return;
         }
     }

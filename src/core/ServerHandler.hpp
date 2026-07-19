@@ -4,6 +4,9 @@
 
 #include "../helpers/Memory.hpp"
 
+#include <sys/types.h>
+#include <vector>
+
 class CCoreProtocolHandler;
 
 class CServerHandler {
@@ -20,12 +23,14 @@ class CServerHandler {
     bool                        isAlreadyRunning();
     bool                        createLockFile();
     void                        removeFiles();
+    void                        terminateBarmaids();
 
     bool                        launchBarmaids();
 
     bool                        m_exit = false;
 
     SP<Hyprwire::IServerSocket> m_socket;
+    std::vector<pid_t>          m_barmaidPids;
 };
 
 inline UP<CServerHandler> g_serverHandler;

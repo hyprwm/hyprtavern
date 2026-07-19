@@ -5,6 +5,18 @@
   pkg-config,
   hyprwire,
   hyprutils,
+  hyprtoolkit,
+  hyprwire-protocols,
+  pixman,
+  aquamarine,
+  hyprgraphics,
+  libuuid,
+  libdrm,
+  cairo,
+  pango,
+  libGL,
+  libxkbcommon,
+  openssl,
   version ? "git",
   shortRev ? "",
 }:
@@ -22,6 +34,18 @@ stdenv.mkDerivation {
   buildInputs = [
     hyprwire
     hyprutils
+    libuuid
+    libdrm
+    pixman
+    openssl
+    cairo
+    pango
+    hyprgraphics
+    hyprtoolkit
+    aquamarine
+    libGL
+    hyprwire-protocols
+    libxkbcommon
   ];
 
   cmakeFlags = lib.mapAttrsToList lib.cmakeFeature {

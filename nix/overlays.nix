@@ -18,8 +18,9 @@ in
   default = inputs.self.overlays.hyprtavern;
 
   hyprtavern-with-deps = lib.composeManyExtensions [
-    inputs.hyprwire.overlays.default
-    inputs.hyprutils.overlays.default
+    inputs.hyprwire.overlays.hyprwire-with-deps
+    inputs.hyprtoolkit.overlays.hyprtoolkit-with-deps
+    inputs.hyprwire-protocols.overlays.default
     self.overlays.hyprtavern
   ];
 

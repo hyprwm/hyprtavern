@@ -7,6 +7,7 @@
 #include "Crypto.hpp"
 
 #include <filesystem>
+#include <unistd.h>
 
 #include <hyprutils/os/File.hpp>
 #include <hyprutils/utils/ScopeGuard.hpp>

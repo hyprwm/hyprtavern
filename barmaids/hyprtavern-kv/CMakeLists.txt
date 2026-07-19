@@ -12,6 +12,7 @@ pkg_check_modules(
   hyprtoolkit
   pixman-1
   libdrm
+  xkbcommon
 )
 
 function(hyprprotocolServer protoPath protoName external)
@@ -52,8 +53,8 @@ hyprprotocol(hyprtavern hp_hyprtavern_core_v1 false)
 hyprprotocolServer(hyprtavern hp_hyprtavern_kv_store_v1 false)
 hyprprotocolServer(hyprtavern hp_hyprtavern_barmaid_v1 false)
 
-target_include_directories(hyprtavern-kv PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/protocols")
+target_include_directories(hyprtavern-kv PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/protocols" ${kv_deps_INCLUDE_DIRS})
 
-target_link_libraries(hyprtavern-kv PkgConfig::deps PkgConfig::kv_deps)
+target_link_libraries(hyprtavern-kv PkgConfig::deps PkgConfig::kv_deps glaze::glaze)
 
 install(TARGETS hyprtavern-kv)

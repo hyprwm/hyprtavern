@@ -2,6 +2,8 @@
 #include "../helpers/Logger.hpp"
 #include "../ui/GUI.hpp"
 
+#include <algorithm>
+
 #include <sys/poll.h>
 
 constexpr const uint32_t                               TAVERN_PROTOCOL_VERSION = 1;
@@ -11,6 +13,10 @@ constexpr const uint32_t                               MAID_PROTOCOL_VERSION   =
 static SP<CCHpHyprtavernCoreV1Impl>                    impl = makeShared<CCHpHyprtavernCoreV1Impl>(TAVERN_PROTOCOL_VERSION);
 static SP<CHpHyprtavernBarmaidV1Impl>                  barmaidImpl;
 static SP<CHpHyprtavernPermissionAuthenticationV1Impl> pdImpl;
+
+static bool                                            hasTavernkeep(const std::vector<uint32_t>& perms) {
+    return std::ranges::contains(perms, HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_TYPE_TAVERNKEEP);
+}
 
 //
 
@@ -44,8 +50,10 @@ CTransactionObject::CTransactionObject(SP<CHpHyprtavernPermissionAuthenticationT
             return;
         }
 
-        // FIXME: this is WRONG
-        m_object->sendPermissionResult(perm, HP_HYPRTAVERN_PERMISSION_AUTHENTICATION_V1_RESPONSE_TYPE_ACCEPTED_PERSISTENT);
+        m_object->sendPermissionResult(perm,
+                                       type == HP_HYPRTAVERN_PERMISSION_AUTHENTICATION_V1_ASK_TYPE_PERSIST ?
+                                           HP_HYPRTAVERN_PERMISSION_AUTHENTICATION_V1_RESPONSE_TYPE_ACCEPTED_PERSISTENT :
+                                           HP_HYPRTAVERN_PERMISSION_AUTHENTICATION_V1_RESPONSE_TYPE_ACCEPTED_ONCE);
         return;
     });
 }
@@ -58,6 +66,11 @@ CManagerObject::CManagerObject(SP<CHpHyprtavernPermissionAuthenticationManagerV1
 
     if (const auto PERM = g_core->permDataFor(m_object->getObject()->client()); PERM)
         m_perms = *PERM;
+
+    if (!hasTavernkeep(m_perms.permissions)) {
+        m_object->error(-1, "permission authentication protocol requires tavernkeep");
+        return;
+    }
 
     m_object->sendAvailability(GUI::available);
 
@@ -113,19 +126,28 @@ bool CCore::init(int fd) {
 
     m_tavern.busObject = makeShared<CCHpHyprtavernBusObjectV1Object>(m_tavern.manager->sendGetBusObject("hyprtavern-perm-daemon"));
 
+    m_tavern.busObject->sendRequirePermissions({HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_TYPE_TAVERNKEEP});
     m_tavern.busObject->sendExposeProtocol("hp_hyprtavern_permission_authentication_v1", PD_PROTOCOL_VERSION, {HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_TYPE_TAVERNKEEP}, 1);
-    m_tavern.busObject->sendExposeProtocol("hp_hyprtavern_barmaid_v1", MAID_PROTOCOL_VERSION, {HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_TYPE_TAVERNKEEP}, 1);
+    m_tavern.busObject->sendExposeProtocol("hp_hyprtavern_barmaid_v1", MAID_PROTOCOL_VERSION, {HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_TYPE_TAVERNKEEP}, 0);
 
     static bool failedToExpose = false;
 
     m_tavern.busObject->setExposeProtocolError([](uint32_t err) { failedToExpose = true; });
-    m_tavern.busObject->setNewFd([this](int fd, const char* token) {
+    m_tavern.busObject->setNewFd([this](int fd, const char* token, const std::vector<const char*>& protocolScope) {
         auto x = m_object.socket->addClient(fd);
 
         if (!x) {
             g_logger->log(LOG_ERR, "failed to connect client new fd {}", fd);
             return;
         }
+
+        std::vector<std::string> scope;
+        scope.reserve(protocolScope.size());
+        for (const auto& p : protocolScope) {
+            scope.emplace_back(p);
+        }
+
+        x->setProtocolFilter([scope = std::move(scope)](std::string_view protocol) { return std::ranges::any_of(scope, [protocol](const auto& p) { return p == protocol; }); });
 
         auto permData       = permDataFor(x);
         permData->tokenUsed = token;
@@ -134,7 +156,7 @@ bool CCore::init(int fd) {
             // get the perms from the bus
             auto response = makeShared<CCHpHyprtavernSecurityResponseV1Object>(m_tavern.manager->sendGetSecurityResponse(token));
 
-            response->setPermissions([&permData, fd](const std::vector<uint32_t>& perms) {
+            response->setPermissions([permData, fd](const std::vector<uint32_t>& perms) {
                 g_logger->log(LOG_DEBUG, "incoming fd {} has {} perms", fd, perms.size());
                 permData->permissions = perms;
             });
@@ -158,7 +180,15 @@ bool CCore::init(int fd) {
     });
 
     barmaidImpl = makeShared<CHpHyprtavernBarmaidV1Impl>(1, [this](SP<Hyprwire::IObject> obj) {
-        auto x = m_object.barmaids.emplace_back(makeShared<CHpHyprtavernBarmaidManagerV1Object>(std::move(obj)));
+        auto manager = makeShared<CHpHyprtavernBarmaidManagerV1Object>(std::move(obj));
+        auto perms   = permDataFor(manager->getObject()->client());
+
+        if (!perms || !hasTavernkeep(perms->permissions)) {
+            manager->error(-1, "barmaid protocol requires tavernkeep");
+            return;
+        }
+
+        auto x = m_object.barmaids.emplace_back(manager);
 
         // we're always ready
         x->sendReady();
@@ -205,17 +235,26 @@ void CCore::run() {
             return;
         }
 
-        if (fds[0].revents & POLLIN)
-            m_tavern.socket->dispatchEvents();
-        if (fds[1].revents & POLLIN)
-            m_object.socket->dispatchEvents();
+        if (fds[0].revents & POLLIN) {
+            if (!m_tavern.socket->dispatchEvents()) {
+                g_logger->log(LOG_ERR, "client socket fd dispatch failed");
+                return;
+            }
+        }
 
-        if (fds[0].revents & POLLHUP) {
+        if (fds[1].revents & POLLIN) {
+            if (!m_object.socket->dispatchEvents()) {
+                g_logger->log(LOG_ERR, "servur socket fd dispatch failed");
+                return;
+            }
+        }
+
+        if (fds[0].revents & (POLLHUP | POLLERR | POLLNVAL)) {
             g_logger->log(LOG_ERR, "client socket fd died");
             return;
         }
 
-        if (fds[1].revents & POLLHUP) {
+        if (fds[1].revents & (POLLHUP | POLLERR | POLLNVAL)) {
             g_logger->log(LOG_ERR, "servur socket fd died");
             return;
         }
