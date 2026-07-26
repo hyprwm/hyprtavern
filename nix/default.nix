@@ -21,7 +21,7 @@
   shortRev ? "",
 }:
 stdenv.mkDerivation {
-  pname = "hyprlock";
+  pname = "hyprtavern";
   inherit version;
 
   src = ../.;
