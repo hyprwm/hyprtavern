@@ -3,6 +3,7 @@
   stdenv,
   cmake,
   pkg-config,
+  gtest,
   hyprwire,
   hyprutils,
   hyprtoolkit,
@@ -17,11 +18,12 @@
   libGL,
   libxkbcommon,
   openssl,
+  glaze,
   version ? "git",
   shortRev ? "",
 }:
 stdenv.mkDerivation {
-  pname = "hyprlock";
+  pname = "hyprtavern";
   inherit version;
 
   src = ../.;
@@ -32,12 +34,14 @@ stdenv.mkDerivation {
   ];
 
   buildInputs = [
+    gtest
     hyprwire
     hyprutils
     libuuid
     libdrm
     pixman
     openssl
+    glaze
     cairo
     pango
     hyprgraphics

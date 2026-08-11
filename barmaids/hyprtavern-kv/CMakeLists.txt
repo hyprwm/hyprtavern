@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.19)
 
-file(GLOB_RECURSE KV_SRCFILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/protocols/*.cpp")
+file(GLOB_RECURSE KV_SRCFILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
+set(KV_PROTOCOLS_DIR "${CMAKE_CURRENT_BINARY_DIR}/protocols")
+file(MAKE_DIRECTORY "${KV_PROTOCOLS_DIR}")
 
 add_executable(hyprtavern-kv ${KV_SRCFILES})
 
@@ -21,15 +23,16 @@ function(hyprprotocolServer protoPath protoName external)
   else()
     set(path ${HYPRWIRE_PROTOCOLS_DIR}/${protoPath})
   endif()
+  set(xml "${path}/${protoName}.xml")
   add_custom_command(
-    OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/protocols/${protoName}-server.cpp
-           ${CMAKE_CURRENT_SOURCE_DIR}/protocols/${protoName}-server.hpp
-    COMMAND hyprwire-scanner ${path}/${protoName}.xml
-            ${CMAKE_CURRENT_SOURCE_DIR}/protocols/
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
-  target_sources(hyprtavern-kv PRIVATE protocols/${protoName}-server.cpp
-                                   protocols/${protoName}-server.hpp
-                                   )
+    OUTPUT "${KV_PROTOCOLS_DIR}/${protoName}-server.cpp"
+           "${KV_PROTOCOLS_DIR}/${protoName}-server.hpp"
+    COMMAND "${HYPRWIRE_SCANNER_EXECUTABLE}" "${xml}" "${KV_PROTOCOLS_DIR}"
+    DEPENDS "${xml}" "${HYPRWIRE_SCANNER_EXECUTABLE}"
+    VERBATIM)
+  target_sources(hyprtavern-kv PRIVATE
+    "${KV_PROTOCOLS_DIR}/${protoName}-server.cpp"
+    "${KV_PROTOCOLS_DIR}/${protoName}-server.hpp")
 endfunction()
 
 function(hyprprotocol protoPath protoName external)
@@ -38,22 +41,23 @@ function(hyprprotocol protoPath protoName external)
   else()
     set(path ${HYPRWIRE_PROTOCOLS_DIR}/${protoPath})
   endif()
+  set(xml "${path}/${protoName}.xml")
   add_custom_command(
-    OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/protocols/${protoName}-client.cpp
-           ${CMAKE_CURRENT_SOURCE_DIR}/protocols/${protoName}-client.hpp
-    COMMAND hyprwire-scanner --client ${path}/${protoName}.xml
-            ${CMAKE_CURRENT_SOURCE_DIR}/protocols/
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
-  target_sources(hyprtavern-kv PRIVATE protocols/${protoName}-client.cpp
-                                   protocols/${protoName}-client.hpp
-                                   )
+    OUTPUT "${KV_PROTOCOLS_DIR}/${protoName}-client.cpp"
+           "${KV_PROTOCOLS_DIR}/${protoName}-client.hpp"
+    COMMAND "${HYPRWIRE_SCANNER_EXECUTABLE}" --client "${xml}" "${KV_PROTOCOLS_DIR}"
+    DEPENDS "${xml}" "${HYPRWIRE_SCANNER_EXECUTABLE}"
+    VERBATIM)
+  target_sources(hyprtavern-kv PRIVATE
+    "${KV_PROTOCOLS_DIR}/${protoName}-client.cpp"
+    "${KV_PROTOCOLS_DIR}/${protoName}-client.hpp")
 endfunction()
 
 hyprprotocol(hyprtavern hp_hyprtavern_core_v1 false)
 hyprprotocolServer(hyprtavern hp_hyprtavern_kv_store_v1 false)
 hyprprotocolServer(hyprtavern hp_hyprtavern_barmaid_v1 false)
 
-target_include_directories(hyprtavern-kv PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/protocols" ${kv_deps_INCLUDE_DIRS})
+target_include_directories(hyprtavern-kv PRIVATE "${KV_PROTOCOLS_DIR}" ${kv_deps_INCLUDE_DIRS})
 
 target_link_libraries(hyprtavern-kv PkgConfig::deps PkgConfig::kv_deps glaze::glaze)
 

@@ -6,8 +6,8 @@
 #include <algorithm>
 #include <array>
 #include <format>
-#include <random>
-#include <limits>
+#include <chrono>
+#include <string_view>
 
 #include <hyprutils/utils/ScopeGuard.hpp>
 using namespace Hyprutils::Utils;
@@ -31,7 +31,28 @@ static SP<CHpHyprtavernCoreV1Impl>                      coreImpl;
 static uint32_t                                         maxId = 1;
 
 constexpr const std::array<const char*, 2>              ENV_FREE_TO_UPDATE = {"WAYLAND_DISPLAY", "DISPLAY"};
-constexpr const std::array<const char*, 3> RESERVED_PROTOCOLS = {"hp_hyprtavern_kv_store_v1", "hp_hyprtavern_permission_authentication_v1", "hp_hyprtavern_barmaid_v1"};
+constexpr const std::array<const char*, 3> RESERVED_PROTOCOLS  = {"hp_hyprtavern_kv_store_v1", "hp_hyprtavern_permission_authentication_v1", "hp_hyprtavern_barmaid_v1"};
+constexpr const size_t                     MAX_ONE_TIME_TOKENS = 4096;
+constexpr const auto                       ONE_TIME_TOKEN_TTL  = std::chrono::seconds{30};
+
+namespace {
+    bool validQueryMode(hpHyprtavernCoreV1BusQueryFilterMode mode) {
+        return mode == HP_HYPRTAVERN_CORE_V1_BUS_QUERY_FILTER_MODE_ALL || mode == HP_HYPRTAVERN_CORE_V1_BUS_QUERY_FILTER_MODE_ANY;
+    }
+
+    bool knownPermissionDaemonResult(uint32_t result) {
+        return result == HP_HYPRTAVERN_PERMISSION_AUTHENTICATION_V1_RESPONSE_TYPE_ACCEPTED_ONCE ||
+            result == HP_HYPRTAVERN_PERMISSION_AUTHENTICATION_V1_RESPONSE_TYPE_ACCEPTED_PERSISTENT || result == HP_HYPRTAVERN_PERMISSION_AUTHENTICATION_V1_RESPONSE_TYPE_DENIED ||
+            result == HP_HYPRTAVERN_PERMISSION_AUTHENTICATION_V1_RESPONSE_TYPE_UNAVAILABLE;
+    }
+
+    void appendUnique(std::vector<uint32_t>& destination, const std::vector<uint32_t>& source) {
+        for (const auto permission : source) {
+            if (!std::ranges::contains(destination, permission))
+                destination.emplace_back(permission);
+        }
+    }
+}
 
 //
 
@@ -48,6 +69,16 @@ CBusQuery::CBusQuery(SP<CHpHyprtavernBusQueryV1Object>&& obj, SQueryData&& data,
     // run the query
     std::vector<uint32_t> matches;
     auto                  managerSP = m_manager.lock();
+
+    if (!validQueryMode(m_data.protoFilter) || !validQueryMode(m_data.propFilter)) {
+        m_object->error(-1, "Invalid query filter mode");
+        return;
+    }
+
+    if (std::ranges::any_of(m_data.props, [](const auto& property) { return !property.contains('='); })) {
+        m_object->error(HP_HYPRTAVERN_CORE_V1_BUS_MANAGER_ERRORS_INVALID_PROPERTY, "Invalid property in query");
+        return;
+    }
 
     for (const auto& obj : g_coreProto->m_objects) {
         if (!managerSP || !managerSP->hasAllPerms(obj->m_requiredPerms))
@@ -89,10 +120,6 @@ CBusQuery::CBusQuery(SP<CHpHyprtavernBusQueryV1Object>&& obj, SQueryData&& data,
             if (m_data.propFilter == HP_HYPRTAVERN_CORE_V1_BUS_QUERY_FILTER_MODE_ALL) {
                 bool matched = true;
                 for (const auto& p : m_data.props) {
-                    if (!p.contains('=')) {
-                        m_object->error(HP_HYPRTAVERN_CORE_V1_BUS_OBJECT_ERRORS_INVALID_PROPERTY_NAME, "Invalid property in query");
-                        return;
-                    }
                     size_t           eqPos    = p.find('=');
                     std::string_view propName = std::string_view(p).substr(0, eqPos);
                     std::string_view propVal  = std::string_view(p).substr(eqPos + 1);
@@ -109,10 +136,6 @@ CBusQuery::CBusQuery(SP<CHpHyprtavernBusQueryV1Object>&& obj, SQueryData&& data,
             } else {
                 bool matched = false;
                 for (const auto& p : m_data.props) {
-                    if (!p.contains('=')) {
-                        m_object->error(HP_HYPRTAVERN_CORE_V1_BUS_OBJECT_ERRORS_INVALID_PROPERTY_NAME, "Invalid property in query");
-                        return;
-                    }
                     size_t           eqPos    = p.find('=');
                     std::string_view propName = std::string_view(p).substr(0, eqPos);
                     std::string_view propVal  = std::string_view(p).substr(eqPos + 1);
@@ -151,7 +174,13 @@ CBusObject::CBusObject(SP<CHpHyprtavernBusObjectV1Object>&& obj, const char* nam
     m_object->setDestroy([this]() { g_coreProto->removeObject(this); });
 
     m_object->setExposeProtocol([this](const char* name, uint32_t rev, const std::vector<uint32_t>& requiredPerms, uint32_t exclusiveMode) {
-        if (g_coreProto->isReservedProtocol(name)) {
+        const std::string_view protocolName = name ? std::string_view{name} : std::string_view{};
+        if (protocolName.empty() || std::ranges::any_of(requiredPerms, [](const auto permission) { return !Security::isKnownPermission(permission); })) {
+            m_object->error(-1, "invalid protocol exposure data");
+            return;
+        }
+
+        if (g_coreProto->isReservedProtocol(protocolName)) {
             auto owner = m_owner.lock();
             if (!owner || !owner->hasPerm(HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_TYPE_TAVERNKEEP)) {
                 m_object->error(-1, "reserved protocols can only be exposed by tavernkeep clients");
@@ -159,26 +188,28 @@ CBusObject::CBusObject(SP<CHpHyprtavernBusObjectV1Object>&& obj, const char* nam
             }
         }
 
-        if (!exclusiveMode) {
-            m_protocols.emplace_back(SProtocolExposeData{.name = name, .rev = rev, .perms = requiredPerms});
+        const bool requestedExclusive = exclusiveMode != 0;
+        for (const auto& object : g_coreProto->m_objects) {
+            const bool conflicts = std::ranges::any_of(object->m_protocols, [&protocolName, requestedExclusive](const auto& exposed) {
+                return exposed.name == protocolName && (requestedExclusive || exposed.exclusive);
+            });
+            if (!conflicts)
+                continue;
+
+            m_object->sendExposeProtocolError(HP_HYPRTAVERN_CORE_V1_BUS_OBJECT_EXPOSE_ERRORS_ALREADY_EXPOSED);
             return;
         }
 
-        // exclusive mode: check if this protocol is not already on the bus.
-        for (const auto& o : g_coreProto->m_objects) {
-            const bool HAS = std::ranges::any_of(o->m_protocols, [&name](const auto& e) { return e.name == name; });
-            if (HAS) {
-                // send an error, already taken, ignore this request
-                m_object->sendExposeProtocolError(HP_HYPRTAVERN_CORE_V1_BUS_OBJECT_EXPOSE_ERRORS_ALREADY_EXPOSED);
-                return;
-            }
-        }
-
-        // pass: register
-        m_protocols.emplace_back(SProtocolExposeData{.name = name, .rev = rev, .perms = requiredPerms});
+        m_protocols.emplace_back(SProtocolExposeData{.name = std::string{protocolName}, .rev = rev, .perms = requiredPerms, .exclusive = requestedExclusive});
     });
 
-    m_object->setRequirePermissions([this](const std::vector<uint32_t>& perms) { m_requiredPerms = perms; });
+    m_object->setRequirePermissions([this](const std::vector<uint32_t>& perms) {
+        if (std::ranges::any_of(perms, [](const auto permission) { return !Security::isKnownPermission(permission); })) {
+            m_object->error(-1, "invalid required permission");
+            return;
+        }
+        m_requiredPerms = perms;
+    });
 
     m_object->setExposeProperty([this](const char* n, const char* v) {
         std::string_view name  = n;
@@ -215,6 +246,10 @@ CBusObject::CBusObject(SP<CHpHyprtavernBusObjectV1Object>&& obj, const char* nam
 
         m_props.emplace_back(std::make_pair<>(name, value));
     });
+}
+
+SP<CCoreManagerObject> CBusObject::owner() const {
+    return m_owner.lock();
 }
 
 void CBusObject::sendNewConnection(int fd, const std::string& token, const std::vector<std::string>& protocolScope) {
@@ -275,24 +310,29 @@ CBusObjectHandle::CBusObjectHandle(SP<CHpHyprtavernBusObjectHandleV1Object>&& ob
             protocolScope.emplace_back(requested);
         }
 
-        int fds[2];
+        auto recipient = m_busObject->owner();
+        if (!recipient) {
+            m_object->sendSocketFailed(HP_HYPRTAVERN_CORE_V1_BUS_OBJECT_CONNECTION_ERROR_UNKNOWN_ERROR);
+            return;
+        }
 
+        int fds[2];
         if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) < 0) {
             g_logger->log(LOG_ERR, "failed to create a socketpair");
             m_object->sendSocketFailed(HP_HYPRTAVERN_CORE_V1_BUS_OBJECT_CONNECTION_ERROR_UNKNOWN_ERROR);
             return;
         }
 
-        m_object->sendSocket(fds[0]);
-
-        if (m_manager->m_associatedSecurityToken.empty())
-            m_busObject->sendNewConnection(fds[1], "", protocolScope);
-        else {
-            // FIXME: small leak. Clean up uuids after object is gone?
-            auto uuid                            = g_coreProto->generateToken();
-            g_coreProto->m_oneTimeTokenMap[uuid] = m_manager->m_associatedSecurityToken;
-            m_busObject->sendNewConnection(fds[1], uuid, protocolScope);
+        const auto oneTimeToken = g_coreProto->issueConnectionToken(manager, recipient);
+        if (oneTimeToken.empty()) {
+            close(fds[0]);
+            close(fds[1]);
+            m_object->sendSocketFailed(HP_HYPRTAVERN_CORE_V1_BUS_OBJECT_CONNECTION_ERROR_UNKNOWN_ERROR);
+            return;
         }
+
+        m_object->sendSocket(fds[0]);
+        m_busObject->sendNewConnection(fds[1], oneTimeToken, protocolScope);
 
         close(fds[0]);
         close(fds[1]);
@@ -362,11 +402,9 @@ CCoreManagerObject::CCoreManagerObject(SP<CHpHyprtavernCoreManagerV1Object>&& ob
 
     auto client  = m_object->getObject()->client();
     m_isInternal = g_coreProto->isInternalClient(client) || client == g_coreProto->m_client.wireClient;
+    m_authority  = m_isInternal ? Security::ePrincipalAuthority::INTERNAL : Security::ePrincipalAuthority::EXTERNAL;
 
-    m_securityProvider = Security::identify(client);
-
-    if (m_isInternal)
-        m_associatedSecurityToken = g_coreProto->m_tavernkeepToken;
+    m_securityProvider = Security::identify(client, m_authority);
 
     m_object->setGetBusObject([this](uint32_t seq, const char* objectName) {
         if (!g_coreProto->m_barmaidsReady && !m_isInternal) {
@@ -445,8 +483,6 @@ CCoreManagerObject::CCoreManagerObject(SP<CHpHyprtavernCoreManagerV1Object>&& ob
 
         m_security = x;
         x->m_self  = x;
-        if (!x->m_token.empty())
-            m_associatedSecurityToken = x->m_token;
     });
 
     m_object->setGetSecurityResponse([this](uint32_t seq, const char* token) {
@@ -454,7 +490,8 @@ CCoreManagerObject::CCoreManagerObject(SP<CHpHyprtavernCoreManagerV1Object>&& ob
             makeShared<CSecurityResponse>(             //
                 makeShared<CHpHyprtavernSecurityResponseV1Object>(
                     g_coreProto->m_sock->createObject(m_object->getObject()->client(), m_object->getObject(), "hp_hyprtavern_security_response_v1", seq)), //
-                token                                                                                                                                      //
+                token,                                                                                                                                     //
+                m_self.lock()                                                                                                                              //
                 ));
     });
 
@@ -494,25 +531,35 @@ bool CCoreManagerObject::hasPerm(hpHyprtavernCoreV1SecurityPermissionType type) 
     return hasPerm(sc<uint32_t>(type));
 }
 
+bool CCoreManagerObject::hasExplicitPerm(uint32_t type) const {
+    if (!m_security)
+        return false;
+
+    return Security::permissionListHas(m_security->m_sessionPerms, type) || Security::permissionListHas(m_security->m_kvData.persistentPerms, type);
+}
+
+bool CCoreManagerObject::permissionGrantedByPolicy(uint32_t type) const {
+    if (!Security::isExternallyRequestablePermission(type) || !g_coreProto->m_securityPolicy.nonSandboxedAppsBypassPermissions || !m_securityProvider)
+        return false;
+
+    return m_securityProvider->classification() == Security::eIdentityClass::HOST_SAME_UID && m_securityProvider->trustworthy();
+}
+
+bool CCoreManagerObject::hasPersistentIdentity() const {
+    return m_securityProvider && m_securityProvider->trustworthy() && m_securityProvider->appIDPersistent();
+}
+
 bool CCoreManagerObject::hasPerm(uint32_t type) {
-    if (m_isInternal || m_associatedSecurityToken == g_coreProto->m_tavernkeepToken)
+    if (!Security::isKnownPermission(type))
+        return false;
+
+    if (m_authority == Security::ePrincipalAuthority::INTERNAL)
         return true;
 
-    if (m_security) {
-        if (Security::permissionListHas(m_security->m_sessionPerms, type))
-            return true;
+    if (!Security::isExternallyRequestablePermission(type))
+        return false;
 
-        if (Security::permissionListHas(m_security->m_kvData.persistentPerms, type))
-            return true;
-    }
-
-// FIXME: configurabel!
-#define NON_SANDBOXED_BYPASS true
-
-    if (type != HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_TYPE_TAVERNKEEP && NON_SANDBOXED_BYPASS && m_securityProvider->type() == Security::PROVIDER_NAIVE)
-        return true;
-
-    return false;
+    return hasExplicitPerm(type) || permissionGrantedByPolicy(type);
 }
 
 bool CCoreManagerObject::hasAllPerms(const std::vector<uint32_t>& perms) {
@@ -539,7 +586,8 @@ CSecurityObject::CSecurityObject(SP<CHpHyprtavernSecurityObjectV1Object>&& obj, 
     m_object->setOnDestroy([this]() { g_coreProto->removeObject(this); });
     m_object->setDestroy([this]() { g_coreProto->removeObject(this); });
 
-    if (!g_coreProto->m_client.kvOpen) {
+    if (!manager || !g_coreProto->m_client.kvOpen || !g_coreProto->m_client.kvManager || !g_coreProto->m_client.kvSock ||
+        (manager->m_authority == Security::ePrincipalAuthority::EXTERNAL && !g_coreProto->m_barmaidsReady)) {
         m_object->sendUnavailable();
         return;
     }
@@ -548,102 +596,176 @@ CSecurityObject::CSecurityObject(SP<CHpHyprtavernSecurityObjectV1Object>&& obj, 
         m_pid = manager->m_securityProvider->pid();
 
     m_object->setSetIdentity([this](const char* name, const char* desc) {
-        m_name        = name;
-        m_description = desc;
+        const std::string_view appName        = name ? name : "";
+        const std::string_view appDescription = desc ? desc : "";
+        if (appName.size() > 256 || appDescription.size() > 2048) {
+            m_object->error(-1, "security identity is too large");
+            return;
+        }
+
+        m_name                  = appName;
+        m_description           = appDescription;
+        m_kvData.schemaVersion  = 2;
+        m_kvData.appName        = m_name;
+        m_kvData.appDescription = m_description;
+
+        auto manager = m_manager.lock();
+        if (m_token.empty() || !manager || !manager->hasPersistentIdentity() || !g_coreProto->m_client.kvManager)
+            return;
+
+        const auto fullTokenKey = std::format("token:{}", m_token);
+        if (auto serialized = glz::write_json(m_kvData); serialized)
+            g_coreProto->m_client.kvManager->sendSetValue(fullTokenKey.c_str(), serialized->c_str(), HP_HYPRTAVERN_KV_STORE_V1_VALUE_TYPE_TAVERN_VALUE);
+        else
+            g_logger->log(LOG_ERR, "failed to persist security identity for token");
     });
 
     m_object->setObtainPermission([this](hpHyprtavernCoreV1SecurityPermissionType type, hpHyprtavernCoreV1SecurityPermissionMode mode) {
-        auto manager = m_manager.lock();
-        if (manager && manager->hasPerm(type)) {
+        const auto requestedPermission = static_cast<uint32_t>(type);
+        const auto requestedMode       = static_cast<uint32_t>(mode);
+        auto       manager             = m_manager.lock();
+
+        if (!manager || !Security::isExternallyRequestablePermission(requestedPermission) || !Security::isKnownPermissionMode(requestedMode)) {
+            m_object->sendPermissionResult(type, HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_RESULT_FAILED);
+            return;
+        }
+
+        if (manager->hasExplicitPerm(requestedPermission)) {
             m_object->sendPermissionResult(type, HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_RESULT_ALREADY_GRANTED);
+            return;
+        }
+
+        if (manager->permissionGrantedByPolicy(requestedPermission)) {
+            m_object->sendPermissionResult(type, HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_RESULT_GRANTED_BY_POLICY);
+            return;
+        }
+
+        if (!g_coreProto->m_barmaidsReady || !g_coreProto->m_client.pdManager || !g_coreProto->m_client.pdOpen) {
+            m_object->sendPermissionResult(type, HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_RESULT_FAILED);
             return;
         }
 
         auto object = g_coreProto->m_transactions.emplace_back(
             makeShared<CCHpHyprtavernPermissionAuthenticationTransactionV1Object>(g_coreProto->m_client.pdManager->sendInitPermissionTransaction()));
 
-        std::string appName = m_name.empty() ? "Unknown application" : m_name;
-        std::string appID   = "unknown";
-        if (manager) {
-            if (manager->m_securityProvider->appID())
-                appID = *manager->m_securityProvider->appID();
-            else if (manager->m_securityProvider->path())
-                appID = *manager->m_securityProvider->path();
-        }
+        const bool        persistenceAllowed = requestedMode == HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_MODE_PERMANENT && manager->hasPersistentIdentity();
+        const auto        effectiveMode      = persistenceAllowed ? requestedMode : static_cast<uint32_t>(HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_MODE_SESSION);
 
-        object->sendSetAppName(appName.c_str());
-        object->sendSetAppIdentifier(appID.c_str());
-        object->sendAskPermission(type, sc<hpHyprtavernPermissionAuthenticationV1AskType>(mode));
+        const std::string appName = m_name.empty() ? "Unknown application" : m_name;
+        std::string       appID   = "unknown";
+        if (manager->m_securityProvider->appID())
+            appID = *manager->m_securityProvider->appID();
+        else if (manager->m_securityProvider->path())
+            appID = *manager->m_securityProvider->path();
 
-        object->setPermissionResult([this, w = WP<CSecurityObject>{m_self}, object, mode](uint32_t perm, uint32_t result) {
-            CScopeGuard x([&object] {
+        object->setPermissionResult([w = WP<CSecurityObject>{m_self}, object, requestedPermission, effectiveMode](uint32_t permission, uint32_t result) {
+            CScopeGuard cleanup([&object] {
                 object->sendDestroy();
                 std::erase(g_coreProto->m_transactions, object);
             });
 
-            if (!w)
+            auto        self = w.lock();
+            if (!self)
                 return;
 
+            if (permission != requestedPermission || !knownPermissionDaemonResult(result)) {
+                self->m_object->sendPermissionResult(static_cast<hpHyprtavernCoreV1SecurityPermissionType>(requestedPermission),
+                                                     HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_RESULT_FAILED);
+                return;
+            }
+
             if (result == HP_HYPRTAVERN_PERMISSION_AUTHENTICATION_V1_RESPONSE_TYPE_DENIED) {
-                m_object->sendPermissionResult(perm, HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_RESULT_DENIED);
+                self->m_object->sendPermissionResult(static_cast<hpHyprtavernCoreV1SecurityPermissionType>(requestedPermission),
+                                                     HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_RESULT_DENIED);
                 return;
             }
 
             if (result == HP_HYPRTAVERN_PERMISSION_AUTHENTICATION_V1_RESPONSE_TYPE_UNAVAILABLE) {
-                m_object->sendPermissionResult(perm, HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_RESULT_FAILED);
+                self->m_object->sendPermissionResult(static_cast<hpHyprtavernCoreV1SecurityPermissionType>(requestedPermission),
+                                                     HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_RESULT_FAILED);
                 return;
             }
 
-            if (mode == HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_MODE_PERMANENT && result == HP_HYPRTAVERN_PERMISSION_AUTHENTICATION_V1_RESPONSE_TYPE_ACCEPTED_PERSISTENT) {
-                if (!Security::permissionListHas(m_kvData.persistentPerms, perm))
-                    m_kvData.persistentPerms.emplace_back(perm);
+            if (effectiveMode == HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_MODE_PERMANENT &&
+                result == HP_HYPRTAVERN_PERMISSION_AUTHENTICATION_V1_RESPONSE_TYPE_ACCEPTED_PERSISTENT) {
+                if (!Security::permissionListHas(self->m_kvData.persistentPerms, requestedPermission))
+                    self->m_kvData.persistentPerms.emplace_back(requestedPermission);
 
-                if (auto manager = m_manager.lock(); manager)
-                    m_kvData.identity = manager->m_securityProvider->identity();
+                if (auto sourceManager = self->m_manager.lock(); sourceManager)
+                    self->m_kvData.identity = sourceManager->m_securityProvider->identity();
 
-                const auto FULL_TOKEN_K = std::format("token:{}", m_token);
-                auto       serialized   = glz::write_json(m_kvData);
-                if (serialized)
-                    g_coreProto->m_client.kvManager->sendSetValue(FULL_TOKEN_K.c_str(), serialized->c_str(), HP_HYPRTAVERN_KV_STORE_V1_VALUE_TYPE_TAVERN_VALUE);
-                else
+                self->m_kvData.schemaVersion  = 2;
+                self->m_kvData.appName        = self->m_name;
+                self->m_kvData.appDescription = self->m_description;
+
+                const auto fullTokenKey = std::format("token:{}", self->m_token);
+                auto       serialized   = glz::write_json(self->m_kvData);
+                if (serialized && g_coreProto->m_client.kvManager)
+                    g_coreProto->m_client.kvManager->sendSetValue(fullTokenKey.c_str(), serialized->c_str(), HP_HYPRTAVERN_KV_STORE_V1_VALUE_TYPE_TAVERN_VALUE);
+                else if (!serialized)
                     g_logger->log(LOG_ERR, "failed to serialize persistent permissions for token");
-            } else if (!Security::permissionListHas(m_sessionPerms, perm))
-                m_sessionPerms.emplace_back(perm);
+            } else if (!Security::permissionListHas(self->m_sessionPerms, requestedPermission))
+                self->m_sessionPerms.emplace_back(requestedPermission);
 
-            m_object->sendPermissionResult(perm, HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_RESULT_GRANTED);
-
-            return;
+            self->m_object->sendPermissionResult(static_cast<hpHyprtavernCoreV1SecurityPermissionType>(requestedPermission),
+                                                 HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_RESULT_GRANTED);
         });
+
+        object->sendSetAppName(appName.c_str());
+        object->sendSetAppIdentifier(appID.c_str());
+        object->sendAskPermission(type, static_cast<hpHyprtavernPermissionAuthenticationV1AskType>(effectiveMode));
     });
 
-    if (!token.empty()) {
-        // try to find the token in the kv
-        const auto  FULL_TOKEN_K = std::format("token:{}", token);
+    if (!token.empty() && manager->hasPersistentIdentity()) {
+        const auto                 fullTokenKey = std::format("token:{}", token);
+        std::optional<std::string> data;
+        bool                       matchingResponseReceived = false;
 
-        std::string data;
+        g_coreProto->m_client.kvManager->setValueObtained([&data, &matchingResponseReceived, fullTokenKey](const char* key, const char* value, uint32_t valueType) {
+            if (!key || std::string_view{key} != fullTokenKey || valueType != HP_HYPRTAVERN_KV_STORE_V1_VALUE_TYPE_TAVERN_VALUE)
+                return;
+            matchingResponseReceived = true;
+            data                     = value ? std::string{value} : std::string{};
+        });
+        CScopeGuard clearKvCallback([] {
+            if (g_coreProto && g_coreProto->m_client.kvManager)
+                g_coreProto->m_client.kvManager->setValueObtained([](const char*, const char*, uint32_t) {});
+        });
 
-        g_coreProto->m_client.kvManager->sendGetValue(FULL_TOKEN_K.c_str(), HP_HYPRTAVERN_KV_STORE_V1_VALUE_TYPE_TAVERN_VALUE);
-        g_coreProto->m_client.kvManager->setValueObtained([&data](const char* k, const char* v, uint32_t type) { data = v; });
-
+        g_coreProto->m_client.kvManager->sendGetValue(fullTokenKey.c_str(), HP_HYPRTAVERN_KV_STORE_V1_VALUE_TYPE_TAVERN_VALUE);
         g_coreProto->m_client.kvSock->roundtrip();
 
-        if (data.empty())
-            g_logger->log(LOG_DEBUG, "received a token that is not in our kv, probably empty");
+        if (!matchingResponseReceived || !data || data->empty())
+            g_logger->log(LOG_DEBUG, "received no matching kv value for security token");
         else {
-            auto parsed = glz::read_json<SPersistenceTokenKvData>(data);
-            if (!parsed) {
-                g_logger->log(LOG_DEBUG, "kv returned a broken response for token, resetting");
-                auto serialized = glz::write_json(SPersistenceTokenKvData{});
-                if (serialized)
-                    g_coreProto->m_client.kvManager->sendSetValue(FULL_TOKEN_K.c_str(), serialized->c_str(), HP_HYPRTAVERN_KV_STORE_V1_VALUE_TYPE_TAVERN_VALUE);
-            } else {
-                // parsed successfully
-                auto manager = m_manager.lock();
-                if (!manager || parsed->identity != manager->m_securityProvider->identity())
+            auto parsed = glz::read_json<SPersistenceTokenKvData>(*data);
+            if (!parsed || (parsed->schemaVersion != 1 && parsed->schemaVersion != 2))
+                g_logger->log(LOG_DEBUG, "kv returned an invalid or unsupported security-token record, minting a fresh token");
+            else {
+                auto       sourceManager         = m_manager.lock();
+                const auto currentIdentity       = sourceManager ? sourceManager->m_securityProvider->identity() : std::string{};
+                bool       legacyIdentityMatches = false;
+                if (sourceManager && parsed->schemaVersion == 1 && sourceManager->m_securityProvider->classification() == Security::eIdentityClass::HOST_SAME_UID &&
+                    sourceManager->m_securityProvider->path()) {
+                    const auto legacyIdentity = std::format("naive:path={}:uid={}:gid={}:chrooted=false", *sourceManager->m_securityProvider->path(), getuid(), getgid());
+                    legacyIdentityMatches     = parsed->identity == legacyIdentity;
+                }
+
+                if (!sourceManager || (parsed->identity != currentIdentity && !legacyIdentityMatches))
                     g_logger->log(LOG_DEBUG, "security token identity mismatch, minting a fresh token");
                 else {
-                    m_token  = token;
-                    m_kvData = *parsed;
+                    parsed->schemaVersion   = 2;
+                    parsed->identity        = currentIdentity;
+                    parsed->persistentPerms = Security::sanitizeExternalPermissions(parsed->persistentPerms);
+                    m_token                 = token;
+                    m_kvData                = *parsed;
+                    m_name                  = parsed->appName;
+                    m_description           = parsed->appDescription;
+
+                    if (legacyIdentityMatches) {
+                        if (auto serialized = glz::write_json(m_kvData); serialized)
+                            g_coreProto->m_client.kvManager->sendSetValue(fullTokenKey.c_str(), serialized->c_str(), HP_HYPRTAVERN_KV_STORE_V1_VALUE_TYPE_TAVERN_VALUE);
+                    }
                 }
             }
         }
@@ -658,69 +780,40 @@ CSecurityObject::CSecurityObject(SP<CHpHyprtavernSecurityObjectV1Object>&& obj, 
     m_object->sendToken(m_token.c_str());
 }
 
-CSecurityResponse::CSecurityResponse(SP<CHpHyprtavernSecurityResponseV1Object>&& obj, const std::string& oneTimeToken) : m_object(std::move(obj)) {
+CSecurityResponse::CSecurityResponse(SP<CHpHyprtavernSecurityResponseV1Object>&& obj, const std::string& oneTimeToken, SP<CCoreManagerObject> recipient) :
+    m_object(std::move(obj)) {
     if (!m_object->getObject())
         return;
 
     m_object->setOnDestroy([this]() { g_coreProto->removeObject(this); });
     m_object->setDestroy([this]() { g_coreProto->removeObject(this); });
 
-    if (!g_coreProto->m_oneTimeTokenMap.contains(oneTimeToken)) {
+    m_connection = g_coreProto->consumeConnectionToken(oneTimeToken, recipient);
+    if (!m_connection) {
         m_object->sendFailed();
         return;
     }
 
-    auto token = g_coreProto->m_oneTimeTokenMap[oneTimeToken];
-    g_coreProto->m_oneTimeTokenMap.erase(oneTimeToken);
+    m_security = m_connection->principal.security;
+    m_object->setRequery([this] { sendData(); });
+    sendData();
+}
 
-    if (token == g_coreProto->m_tavernkeepToken) {
-        m_object->setRequery([this] {
-            m_object->sendIdentity(getpid(), "hyprtavern", "Hyprtavern's tavernkeep");
-            m_object->sendPermissions({HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_TYPE_TAVERNKEEP}); // FIXME: should have all perms
-            m_object->sendDone();
-        });
-
-        m_object->sendIdentity(getpid(), "hyprtavern", "Hyprtavern's tavernkeep");
-        m_object->sendPermissions({HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_TYPE_TAVERNKEEP}); // FIXME: should have all perms
-        m_object->sendDone();
-        return;
-    }
-
-    // find the object we are interested in
-    for (const auto& s : g_coreProto->m_securityObjects) {
-        if (s->m_token != token)
-            continue;
-
-        m_security = s;
-        break;
-    }
-
-    if (!m_security) {
+void CSecurityResponse::sendData() {
+    if (!m_connection) {
         m_object->sendFailed();
         return;
     }
 
-    m_object->setRequery([this] {
-        if (!m_security) {
-            m_object->sendFailed();
-            return;
-        }
+    if (auto source = m_connection->source.lock(); source)
+        m_connection->principal = g_coreProto->principalFor(source);
 
-        std::vector<uint32_t> perms = m_security->m_sessionPerms;
-        perms.reserve(m_security->m_sessionPerms.size() + m_security->m_kvData.persistentPerms.size());
-        perms.append_range(m_security->m_kvData.persistentPerms);
+    const auto& principal = m_connection->principal;
+    m_security            = principal.security;
 
-        m_object->sendIdentity(m_security->m_pid, m_security->m_name.c_str(), m_security->m_description.c_str());
-        m_object->sendPermissions(perms);
-        m_object->sendDone();
-    });
-
-    std::vector<uint32_t> perms = m_security->m_sessionPerms;
-    perms.reserve(m_security->m_sessionPerms.size() + m_security->m_kvData.persistentPerms.size());
-    perms.append_range(m_security->m_kvData.persistentPerms);
-
-    m_object->sendIdentity(m_security->m_pid, m_security->m_name.c_str(), m_security->m_description.c_str());
-    m_object->sendPermissions(perms);
+    const auto& appIdentifier = principal.appIdentifierPersistent ? principal.appIdentifier : std::string{};
+    m_object->sendIdentity(principal.pid < 0 ? 0U : static_cast<uint32_t>(principal.pid), appIdentifier.c_str(), principal.description.c_str());
+    m_object->sendPermissions(principal.permissions);
     m_object->sendDone();
 }
 
@@ -744,14 +837,6 @@ bool CCoreProtocolHandler::init(SP<Hyprwire::IServerSocket> sock) {
     }
 
     m_client.sock = Hyprwire::IClientSocket::open(fds[1]);
-
-    {
-        std::random_device              dev;
-        std::mt19937_64                 engine(dev());
-        std::uniform_int_distribution<> distribution(0ULL, std::numeric_limits<int>::max());
-
-        m_tavernkeepToken = std::format("__tavernkeep__{}_{}__", distribution(engine), distribution(engine));
-    }
 
     m_client.wireClient = m_sock->addClient(fds[0]);
     registerInternalClient(m_client.wireClient.lock());
@@ -836,6 +921,101 @@ std::string CCoreProtocolHandler::generateToken() {
     return uuid;
 }
 
+SConnectionPrincipal CCoreProtocolHandler::principalFor(SP<CCoreManagerObject> manager) const {
+    SConnectionPrincipal principal;
+    if (!manager)
+        return principal;
+
+    principal.authority = manager->m_authority;
+    if (manager->m_securityProvider) {
+        principal.classification          = manager->m_securityProvider->classification();
+        principal.pid                     = manager->m_securityProvider->pid();
+        principal.identity                = manager->m_securityProvider->identity();
+        principal.appIdentifierPersistent = manager->hasPersistentIdentity();
+        if (manager->m_securityProvider->appID())
+            principal.appIdentifier = *manager->m_securityProvider->appID();
+        else if (manager->m_securityProvider->path())
+            principal.appIdentifier = *manager->m_securityProvider->path();
+        if (manager->m_securityProvider->displayName())
+            principal.name = *manager->m_securityProvider->displayName();
+    }
+
+    if (principal.appIdentifier.empty())
+        principal.appIdentifier = "unknown";
+    if (principal.name.empty())
+        principal.name = "Unknown application";
+
+    if (manager->m_authority == Security::ePrincipalAuthority::INTERNAL) {
+        principal.name                    = "hyprtavern";
+        principal.description             = "Hyprtavern internal authority";
+        principal.appIdentifier           = "hyprtavern";
+        principal.appIdentifierPersistent = true;
+        principal.permissions             = {HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_TYPE_TAVERNKEEP};
+        return principal;
+    }
+
+    if (auto security = manager->m_security.lock(); security) {
+        principal.security    = security;
+        principal.name        = security->m_name.empty() ? principal.name : security->m_name;
+        principal.description = security->m_description;
+        principal.permissions = Security::sanitizeExternalPermissions(security->m_sessionPerms);
+        appendUnique(principal.permissions, Security::sanitizeExternalPermissions(security->m_kvData.persistentPerms));
+    }
+
+    if (manager->permissionGrantedByPolicy(HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_TYPE_SETTINGS))
+        appendUnique(principal.permissions, Security::externallyRequestablePermissionGroups());
+
+    return principal;
+}
+
+void CCoreProtocolHandler::pruneConnectionTokens() {
+    const auto now = std::chrono::steady_clock::now();
+    std::erase_if(m_oneTimeTokenMap, [&now](const auto& entry) { return entry.second.expiresAt <= now || !entry.second.expectedRecipient; });
+}
+
+std::string CCoreProtocolHandler::issueConnectionToken(SP<CCoreManagerObject> source, SP<CCoreManagerObject> expectedRecipient) {
+    if (!source || !expectedRecipient)
+        return {};
+
+    pruneConnectionTokens();
+    while (m_oneTimeTokenMap.size() >= MAX_ONE_TIME_TOKENS) {
+        const auto oldest = std::ranges::min_element(m_oneTimeTokenMap, {}, [](const auto& entry) { return entry.second.expiresAt; });
+        if (oldest == m_oneTimeTokenMap.end())
+            return {};
+        m_oneTimeTokenMap.erase(oldest);
+    }
+
+    const auto token = generateToken();
+    m_oneTimeTokenMap.emplace(token,
+                              SOneTimeConnectionToken{
+                                  .principal         = principalFor(source),
+                                  .source            = source,
+                                  .expectedRecipient = expectedRecipient,
+                                  .expiresAt         = std::chrono::steady_clock::now() + ONE_TIME_TOKEN_TTL,
+                              });
+    return token;
+}
+
+std::optional<SOneTimeConnectionToken> CCoreProtocolHandler::consumeConnectionToken(const std::string& token, SP<CCoreManagerObject> recipient) {
+    pruneConnectionTokens();
+    const auto entry = m_oneTimeTokenMap.find(token);
+    if (entry == m_oneTimeTokenMap.end() || !recipient)
+        return std::nullopt;
+
+    auto expectedRecipient = entry->second.expectedRecipient.lock();
+    if (!expectedRecipient) {
+        m_oneTimeTokenMap.erase(entry);
+        return std::nullopt;
+    }
+
+    if (expectedRecipient != recipient)
+        return std::nullopt;
+
+    auto connection = std::move(entry->second);
+    m_oneTimeTokenMap.erase(entry);
+    return connection;
+}
+
 bool CCoreProtocolHandler::initInternalCoreClient() {
     if (m_client.coreManager)
         return true;
@@ -896,7 +1076,7 @@ bool CCoreProtocolHandler::initKv() {
         }
 
         if (maidReady) {
-            g_logger->log(LOG_DEBUG, "CCoreProtocolHandler::initKv: kv barmaid ready");
+            g_logger->log(LOG_DEBUG, "CCoreProtocolHandler::initKv: kv barmaid ready (store {})", m_client.kvOpen ? "available" : "unavailable");
             break;
         }
     }
@@ -932,6 +1112,10 @@ bool CCoreProtocolHandler::initPd() {
     bool maidReady = false;
 
     m_client.pdBarmaidManager->setReady([&maidReady] { maidReady = true; });
+    m_client.pdManager->setAvailability([this](uint32_t available) {
+        m_client.pdOpen              = available != 0;
+        m_client.pdAvailabilityKnown = true;
+    });
 
     while (true) {
         if (!m_client.pdSock->dispatchEvents(true)) {
@@ -939,8 +1123,8 @@ bool CCoreProtocolHandler::initPd() {
             return false;
         }
 
-        if (maidReady) {
-            g_logger->log(LOG_DEBUG, "CCoreProtocolHandler::initPd: pd barmaid ready");
+        if (maidReady && m_client.pdAvailabilityKnown) {
+            g_logger->log(LOG_DEBUG, "CCoreProtocolHandler::initPd: pd barmaid ready (permission prompts {})", m_client.pdOpen ? "available" : "unavailable");
             break;
         }
     }

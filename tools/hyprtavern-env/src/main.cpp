@@ -26,6 +26,8 @@ using namespace Hyprutils::String;
 constexpr const uint32_t                        PROTOCOL_VERSION    = 1;
 constexpr const uint32_t                        KV_PROTOCOL_VERSION = 1;
 constexpr const char*                           KV_TOKEN_NAME       = "core:security_token";
+constexpr const auto                            READY_TIMEOUT       = std::chrono::seconds(10);
+constexpr const auto                            PERMISSION_TIMEOUT  = std::chrono::seconds(30);
 
 static SP<CCHpHyprtavernCoreV1Impl>             impl   = makeShared<CCHpHyprtavernCoreV1Impl>(PROTOCOL_VERSION);
 static SP<CCHpHyprtavernKvStoreV1Impl>          kvImpl = makeShared<CCHpHyprtavernKvStoreV1Impl>(KV_PROTOCOL_VERSION);
@@ -57,16 +59,19 @@ static bool waitForReady() {
     manager->setReady([&ready] { ready = true; });
 
     const auto started = std::chrono::steady_clock::now();
-    while (!ready && std::chrono::steady_clock::now() - started < std::chrono::seconds(10)) {
+    while (!ready && std::chrono::steady_clock::now() - started < READY_TIMEOUT) {
         if (!sock->dispatchEvents(false))
             return false;
 
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
-    if (!ready)
-        std::println("warning: timed out waiting for tavern ready event, continuing anyway");
+    if (!ready) {
+        std::println("err: timed out waiting for tavern ready event");
+        return false;
+    }
 
+    manager->setReady([] {});
     return true;
 }
 
@@ -92,17 +97,31 @@ static bool createNewSecurityObject(const std::string& token = "") {
 
     security->setUnavailable([&unavailable] { unavailable = true; });
 
-    while (!permissionDone.has_value() && !unavailable) {
-        sock->dispatchEvents(true);
+    const auto started = std::chrono::steady_clock::now();
+    while (!permissionDone.has_value() && !unavailable && std::chrono::steady_clock::now() - started < PERMISSION_TIMEOUT) {
+        if (!sock->dispatchEvents(false)) {
+            std::println("err: transport failed while waiting for permission result");
+            return false;
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
+    if (!permissionDone.has_value() && !unavailable) {
+        std::println("err: timed out waiting for permission result");
+        return false;
+    }
+
+    security->setPermissionResult([](uint32_t perm, uint32_t result) {});
+    security->setUnavailable([] {});
+
     if (unavailable) {
-        std::print("err: permissions unavailable, can't update env");
+        std::println("err: permissions unavailable, can't update env");
         return false;
     }
 
     if (!*permissionDone) {
-        std::print("warning: permission to manage bus env denied, can't update env");
+        std::println("warning: permission to manage bus env denied, can't update env");
         return false;
     }
 
@@ -138,7 +157,7 @@ static bool setupSecurityObject() {
 
     sock->roundtrip();
 
-    if (fd <= 0)
+    if (fd < 0)
         return createNewSecurityObject();
 
     kvSock = Hyprwire::IClientSocket::open(fd);

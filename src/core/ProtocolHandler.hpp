@@ -10,6 +10,8 @@
 #include "../security/identity/SecurityIdentity.hpp"
 #include "../security/Permissions.hpp"
 
+#include <chrono>
+#include <optional>
 #include <string_view>
 #include <unordered_map>
 
@@ -21,8 +23,10 @@ struct SQueryData {
 };
 
 struct SPersistenceTokenKvData {
-    uint32_t              schemaVersion = 1;
+    uint32_t              schemaVersion = 2;
     std::string           identity;
+    std::string           appName;
+    std::string           appDescription;
     std::vector<uint32_t> persistentPerms;
 };
 
@@ -46,12 +50,14 @@ class CBusObject {
     CBusObject(SP<CHpHyprtavernBusObjectV1Object>&& obj, const char* name, SP<CCoreManagerObject> manager);
     ~CBusObject() = default;
 
-    void sendNewConnection(int fd, const std::string& token, const std::vector<std::string>& protocolScope);
+    void                   sendNewConnection(int fd, const std::string& token, const std::vector<std::string>& protocolScope);
+    SP<CCoreManagerObject> owner() const;
 
     struct SProtocolExposeData {
         std::string           name;
         uint32_t              rev = 0;
         std::vector<uint32_t> perms;
+        bool                  exclusive = false;
     };
 
     std::vector<SProtocolExposeData>                 m_protocols;
@@ -72,8 +78,8 @@ class CCoreManagerObject {
     CCoreManagerObject(SP<CHpHyprtavernCoreManagerV1Object>&& obj);
     ~CCoreManagerObject() = default;
 
-    std::string                             m_associatedSecurityToken;
     UP<Security::ISecurityIdentityProvider> m_securityProvider;
+    Security::ePrincipalAuthority           m_authority  = Security::ePrincipalAuthority::EXTERNAL;
     bool                                    m_isInternal = false;
 
     WP<CCoreManagerObject>                  m_self;
@@ -81,6 +87,9 @@ class CCoreManagerObject {
 
     bool                                    hasPerm(hpHyprtavernCoreV1SecurityPermissionType type);
     bool                                    hasPerm(uint32_t type);
+    bool                                    hasExplicitPerm(uint32_t type) const;
+    bool                                    permissionGrantedByPolicy(uint32_t type) const;
+    bool                                    hasPersistentIdentity() const;
     bool                                    hasAllPerms(const std::vector<uint32_t>& perms);
     void                                    sendReady();
 
@@ -107,15 +116,38 @@ class CSecurityObject {
     SP<CHpHyprtavernSecurityObjectV1Object> m_object;
 };
 
+struct SConnectionPrincipal {
+    Security::ePrincipalAuthority authority      = Security::ePrincipalAuthority::EXTERNAL;
+    Security::eIdentityClass      classification = Security::eIdentityClass::UNKNOWN;
+    int                           pid            = -1;
+    std::string                   identity;
+    std::string                   appIdentifier;
+    std::string                   name;
+    std::string                   description;
+    bool                          appIdentifierPersistent = false;
+    std::vector<uint32_t>         permissions;
+    WP<CSecurityObject>           security;
+};
+
+struct SOneTimeConnectionToken {
+    SConnectionPrincipal                  principal;
+    WP<CCoreManagerObject>                source;
+    WP<CCoreManagerObject>                expectedRecipient;
+    std::chrono::steady_clock::time_point expiresAt;
+};
+
 class CSecurityResponse {
   public:
-    CSecurityResponse(SP<CHpHyprtavernSecurityResponseV1Object>&& obj, const std::string& oneTimeToken);
+    CSecurityResponse(SP<CHpHyprtavernSecurityResponseV1Object>&& obj, const std::string& oneTimeToken, SP<CCoreManagerObject> recipient);
     ~CSecurityResponse() = default;
 
     WP<CSecurityObject> m_security;
 
   private:
+    void                                      sendData();
+
     SP<CHpHyprtavernSecurityResponseV1Object> m_object;
+    std::optional<SOneTimeConnectionToken>    m_connection;
 };
 
 class CBusObjectHandle {
@@ -178,17 +210,22 @@ class CCoreProtocolHandler {
         SP<CCHpHyprtavernBarmaidManagerV1Object>                  kvBarmaidManager;
         SP<CCHpHyprtavernPermissionAuthenticationManagerV1Object> pdManager;
         SP<CCHpHyprtavernBarmaidManagerV1Object>                  pdBarmaidManager;
-        bool                                                      kvOpen = false;
+        bool                                                      kvOpen              = false;
+        bool                                                      pdOpen              = false;
+        bool                                                      pdAvailabilityKnown = false;
         WP<Hyprwire::IServerClient>                               wireClient;
     } m_client;
 
-    std::string                                  m_tavernkeepToken = "__tavernkeep__";
+    Security::SSecurityPolicy                                m_securityPolicy;
+    std::unordered_map<std::string, SOneTimeConnectionToken> m_oneTimeTokenMap;
 
-    std::unordered_map<std::string, std::string> m_oneTimeTokenMap;
+    bool                                                     m_barmaidsReady = false;
 
-    bool                                         m_barmaidsReady = false;
-
-    std::string                                  generateToken();
+    std::string                                              generateToken();
+    std::string                                              issueConnectionToken(SP<CCoreManagerObject> source, SP<CCoreManagerObject> expectedRecipient);
+    std::optional<SOneTimeConnectionToken>                   consumeConnectionToken(const std::string& token, SP<CCoreManagerObject> recipient);
+    SConnectionPrincipal                                     principalFor(SP<CCoreManagerObject> manager) const;
+    void                                                     pruneConnectionTokens();
 };
 
 inline UP<CCoreProtocolHandler> g_coreProto;

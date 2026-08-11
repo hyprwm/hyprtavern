@@ -2,39 +2,18 @@
 #include "Kv.hpp"
 #include "../helpers/Logger.hpp"
 
-#include <filesystem>
 #include <algorithm>
+#include <cerrno>
+#include <cstring>
 
+#include <fcntl.h>
 #include <sys/poll.h>
 #include <unistd.h>
-
-#if defined(__DragonFly__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
-#include <sys/sysctl.h>
-#if defined(__DragonFly__)
-#include <sys/kinfo.h> // struct kinfo_proc
-#elif defined(__FreeBSD__)
-#include <sys/user.h> // struct kinfo_proc
-#endif
-
-#if defined(__NetBSD__)
-#undef KERN_PROC
-#define KERN_PROC  KERN_PROC2
-#define KINFO_PROC struct kinfo_proc2
-#else
-#define KINFO_PROC struct kinfo_proc
-#endif
-#if defined(__DragonFly__)
-#define KP_PPID(kp) kp.kp_ppid
-#elif defined(__FreeBSD__)
-#define KP_PPID(kp) kp.ki_ppid
-#else
-#define KP_PPID(kp) kp.p_ppid
-#endif
-#endif
 
 constexpr const uint32_t              TAVERN_PROTOCOL_VERSION = 1;
 constexpr const uint32_t              KV_PROTOCOL_VERSION     = 1;
 constexpr const uint32_t              MAID_PROTOCOL_VERSION   = 1;
+constexpr const size_t                MAX_APP_IDENTIFIER_SIZE = 1024;
 
 static SP<CCHpHyprtavernCoreV1Impl>   impl = makeShared<CCHpHyprtavernCoreV1Impl>(TAVERN_PROTOCOL_VERSION);
 static SP<CHpHyprtavernBarmaidV1Impl> barmaidImpl;
@@ -44,19 +23,31 @@ static bool                           hasTavernkeep(const std::vector<uint32_t>&
     return std::ranges::contains(perms, HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_TYPE_TAVERNKEEP);
 }
 
-//
+static void registerAppIdentifierCallback(const SP<CCHpHyprtavernSecurityResponseV1Object>& response, const SP<SPermData>& principal, const int fd) {
+    response->setIdentity([principal = WP<SPermData>{principal}, fd](uint32_t, const char* identifier, const char*) {
+        auto locked = principal.lock();
+        if (!locked)
+            return;
+
+        if (!identifier || !*identifier || std::string_view{identifier}.size() > MAX_APP_IDENTIFIER_SIZE) {
+            locked->appIdentifier.reset();
+            locked->appIdentifierPersistent = false;
+            g_logger->log(LOG_WARN, "incoming fd {} has no persistent attested application identifier", fd);
+            return;
+        }
+
+        locked->appIdentifier           = identifier;
+        locked->appIdentifierPersistent = true;
+        g_logger->log(LOG_DEBUG, "incoming fd {} received an attested application identifier", fd);
+    });
+}
+
 CManagerObject::CManagerObject(SP<CHpHyprtavernKvStoreManagerV1Object> obj) : m_object(obj) {
     if (!m_object->getObject())
         return;
 
     m_object->setOnDestroy([this]() { g_core->removeObject(this); });
-
-    if (const auto PERM = g_core->permDataFor(m_object->getObject()->client()); PERM)
-        m_perms = *PERM;
-
-    m_pid = m_object->getObject()->client()->getPID();
-
-    getAppBinary();
+    m_perms = g_core->permDataFor(m_object->getObject()->client());
 
     m_object->setSetValue([this](const char* key, const char* val, hpHyprtavernKvStoreV1ValueType type) {
         if (!g_core->m_kv.isOpen()) {
@@ -64,25 +55,45 @@ CManagerObject::CManagerObject(SP<CHpHyprtavernKvStoreManagerV1Object> obj) : m_
             return;
         }
 
+        const std::string_view keyView = key ? key : "";
+        const std::string_view valView = val ? val : "";
+        if (auto valid = CKvStore::validateKey(keyView); !valid) {
+            m_object->error(-1, valid.error().c_str());
+            return;
+        }
+
+        std::expected<void, std::string> result;
         switch (type) {
             case HP_HYPRTAVERN_KV_STORE_V1_VALUE_TYPE_APP_VALUE: {
-                g_core->m_kv.setApp(m_appBinary, key, val);
+                if (!m_perms || !m_perms->appIdentifier || !m_perms->appIdentifierPersistent) {
+                    m_object->error(-1, "APP_VALUE requires a persistent attested application identifier");
+                    return;
+                }
+
+                result = g_core->m_kv.setApp(*m_perms->appIdentifier, keyView, valView);
                 break;
             }
             case HP_HYPRTAVERN_KV_STORE_V1_VALUE_TYPE_UNBOUNDED_VALUE: {
-                g_core->m_kv.setGlobal(key, val);
+                result = g_core->m_kv.setGlobal(keyView, valView);
                 break;
             }
             case HP_HYPRTAVERN_KV_STORE_V1_VALUE_TYPE_TAVERN_VALUE: {
-                if (!hasTavernkeep(m_perms.permissions)) {
+                if (!m_perms || !hasTavernkeep(m_perms->permissions)) {
                     m_object->error(-1, "Insufficient permissions to call set_value with tavern");
                     return;
                 }
 
-                g_core->m_kv.setTavern(key, val);
+                result = g_core->m_kv.setTavern(keyView, valView);
                 break;
             }
+            default: {
+                m_object->error(-1, "set_value received an invalid value type");
+                return;
+            }
         }
+
+        if (!result)
+            m_object->error(-1, result.error().c_str());
     });
 
     m_object->setGetValue([this](const char* key, hpHyprtavernKvStoreV1ValueType type) {
@@ -91,99 +102,53 @@ CManagerObject::CManagerObject(SP<CHpHyprtavernKvStoreManagerV1Object> obj) : m_
             return;
         }
 
+        const std::string_view keyView = key ? key : "";
+        if (auto valid = CKvStore::validateKey(keyView); !valid) {
+            m_object->error(-1, valid.error().c_str());
+            return;
+        }
+
+        std::optional<std::string> result;
         switch (type) {
             case HP_HYPRTAVERN_KV_STORE_V1_VALUE_TYPE_APP_VALUE: {
-                auto ret = g_core->m_kv.getApp(m_appBinary, key);
-                if (!ret)
-                    m_object->sendValueFailed(key, type, HP_HYPRTAVERN_KV_STORE_V1_VALUE_OBTAINING_ERROR_VALUE_MISSING);
-                else
-                    m_object->sendValueObtained(key, ret->c_str(), type);
-                break;
-            }
-            case HP_HYPRTAVERN_KV_STORE_V1_VALUE_TYPE_UNBOUNDED_VALUE: {
-                auto ret = g_core->m_kv.getGlobal(key);
-                if (!ret)
-                    m_object->sendValueFailed(key, type, HP_HYPRTAVERN_KV_STORE_V1_VALUE_OBTAINING_ERROR_VALUE_MISSING);
-                else
-                    m_object->sendValueObtained(key, ret->c_str(), type);
-                break;
-            }
-            case HP_HYPRTAVERN_KV_STORE_V1_VALUE_TYPE_TAVERN_VALUE: {
-                if (!hasTavernkeep(m_perms.permissions)) {
-                    m_object->error(-1, "Insufficient permissions to call set_value with tavern");
+                if (!m_perms || !m_perms->appIdentifier || !m_perms->appIdentifierPersistent) {
+                    m_object->error(-1, "APP_VALUE requires a persistent attested application identifier");
                     return;
                 }
 
-                auto ret = g_core->m_kv.getTavern(key);
-                if (!ret)
-                    m_object->sendValueFailed(key, type, HP_HYPRTAVERN_KV_STORE_V1_VALUE_OBTAINING_ERROR_VALUE_MISSING);
-                else
-                    m_object->sendValueObtained(key, ret->c_str(), type);
+                result = g_core->m_kv.getApp(*m_perms->appIdentifier, keyView);
                 break;
             }
+            case HP_HYPRTAVERN_KV_STORE_V1_VALUE_TYPE_UNBOUNDED_VALUE: {
+                result = g_core->m_kv.getGlobal(keyView);
+                break;
+            }
+            case HP_HYPRTAVERN_KV_STORE_V1_VALUE_TYPE_TAVERN_VALUE: {
+                if (!m_perms || !hasTavernkeep(m_perms->permissions)) {
+                    m_object->error(-1, "Insufficient permissions to call get_value with tavern");
+                    return;
+                }
+
+                result = g_core->m_kv.getTavern(keyView);
+                break;
+            }
+            default: {
+                m_object->error(-1, "get_value received an invalid value type");
+                return;
+            }
         }
+
+        if (!result)
+            m_object->sendValueFailed(keyView.data(), type, HP_HYPRTAVERN_KV_STORE_V1_VALUE_OBTAINING_ERROR_VALUE_MISSING);
+        else
+            m_object->sendValueObtained(keyView.data(), result->c_str(), type);
     });
 
     if (g_core->m_kv.isOpen())
         sendOpen();
 }
 
-CManagerObject::~CManagerObject() {
-    std::erase_if(g_core->m_permDatas, [this](const auto& e) {
-        if (!e.client)
-            return true;
-
-        if (m_object && m_object->getObject() && m_object->getObject()->client())
-            return e.client == m_object->getObject()->client();
-
-        return false;
-    });
-}
-
-static std::expected<std::string, std::string> binaryNameForPid(pid_t pid) {
-    if (pid <= 0)
-        return std::unexpected("No pid for client");
-
-#if defined(KERN_PROC_PATHNAME)
-    int mib[] = {
-        CTL_KERN,
-#if defined(__NetBSD__)
-        KERN_PROC_ARGS,
-        pid,
-        KERN_PROC_PATHNAME,
-#else
-        KERN_PROC,
-        KERN_PROC_PATHNAME,
-        pid,
-#endif
-    };
-    u_int  miblen        = sizeof(mib) / sizeof(mib[0]);
-    char   exe[PATH_MAX] = "/nonexistent";
-    size_t sz            = sizeof(exe);
-    sysctl(mib, miblen, &exe, &sz, NULL, 0);
-    std::string path = exe;
-#else
-    std::string path = std::format("/proc/{}/exe", sc<uint64_t>(pid));
-#endif
-    std::error_code ec;
-
-    std::string     fullPath = std::filesystem::canonical(path, ec);
-
-    if (ec)
-        return std::unexpected("canonical failed");
-
-    return fullPath;
-}
-
-void CManagerObject::getAppBinary() {
-    if (m_pid < 0)
-        return;
-
-    auto res = binaryNameForPid(m_pid);
-
-    if (res)
-        m_appBinary = *res;
-}
+CManagerObject::~CManagerObject() = default;
 
 void CManagerObject::sendOpen() {
     m_object->sendStoreAvailable();
@@ -205,71 +170,27 @@ bool CCore::init(int fd) {
     }
 
     const auto SPEC = m_tavern.socket->getSpec(impl->protocol()->specName());
-
     if (!SPEC) {
         g_logger->log(LOG_ERR, "protocol unsupported");
         return false;
     }
 
-    m_tavern.manager = makeShared<CCHpHyprtavernCoreManagerV1Object>(m_tavern.socket->bindProtocol(impl->protocol(), TAVERN_PROTOCOL_VERSION));
-
-    // set up our object
-
+    m_tavern.manager   = makeShared<CCHpHyprtavernCoreManagerV1Object>(m_tavern.socket->bindProtocol(impl->protocol(), TAVERN_PROTOCOL_VERSION));
     m_tavern.busObject = makeShared<CCHpHyprtavernBusObjectV1Object>(m_tavern.manager->sendGetBusObject("hyprtavern-kv"));
 
-    m_tavern.busObject->sendExposeProtocol("hp_hyprtavern_kv_store_v1", KV_PROTOCOL_VERSION, {}, 1);
-    m_tavern.busObject->sendExposeProtocol("hp_hyprtavern_barmaid_v1", MAID_PROTOCOL_VERSION, {HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_TYPE_TAVERNKEEP}, 0);
-
-    static bool failedToExpose = false;
-
-    m_tavern.busObject->setExposeProtocolError([](uint32_t err) { failedToExpose = true; });
-    m_tavern.busObject->setNewFd([this](int fd, const char* token, const std::vector<const char*>& protocolScope) {
-        auto x = m_object.socket->addClient(fd);
-
-        if (!x) {
-            g_logger->log(LOG_ERR, "failed to connect client new fd {}", fd);
-            return;
-        }
-
-        std::vector<std::string> scope;
-        scope.reserve(protocolScope.size());
-        for (const auto& p : protocolScope) {
-            scope.emplace_back(p);
-        }
-
-        x->setProtocolFilter([scope = std::move(scope)](std::string_view protocol) { return std::ranges::any_of(scope, [protocol](const auto& p) { return p == protocol; }); });
-
-        auto permData       = permDataFor(x);
-        permData->tokenUsed = token;
-
-        if (!permData->tokenUsed.empty()) {
-            // get the perms from the bus
-            auto response = makeShared<CCHpHyprtavernSecurityResponseV1Object>(m_tavern.manager->sendGetSecurityResponse(token));
-
-            response->setPermissions([permData, fd](const std::vector<uint32_t>& perms) {
-                g_logger->log(LOG_DEBUG, "incoming fd {} has {} perms", fd, perms.size());
-                permData->permissions = perms;
-            });
-
-            m_tavern.socket->roundtrip();
-        } else
-            g_logger->log(LOG_DEBUG, "incoming fd {} has no associated token", fd);
-    });
-
-    m_tavern.socket->roundtrip();
-
-    if (failedToExpose) {
-        g_logger->log(LOG_ERR, "failed to expose kv protocol (is a kv manager running?)");
+    // The routed new_fd event can arrive as soon as exposure is dispatched, so
+    // build the complete internal server before sending any exposure requests.
+    m_object.socket = Hyprwire::IServerSocket::open();
+    if (!m_object.socket) {
+        g_logger->log(LOG_ERR, "failed to create kv server socket");
         return false;
     }
 
-    m_object.socket = Hyprwire::IServerSocket::open();
-
-    kvImpl = makeShared<CHpHyprtavernKvStoreV1Impl>(1, [this](SP<Hyprwire::IObject> obj) {
-        auto x = m_object.managers.emplace_back(makeShared<CManagerObject>(makeShared<CHpHyprtavernKvStoreManagerV1Object>(std::move(obj)))); //
+    kvImpl = makeShared<CHpHyprtavernKvStoreV1Impl>(KV_PROTOCOL_VERSION, [this](SP<Hyprwire::IObject> obj) {
+        m_object.managers.emplace_back(makeShared<CManagerObject>(makeShared<CHpHyprtavernKvStoreManagerV1Object>(std::move(obj))));
     });
 
-    barmaidImpl = makeShared<CHpHyprtavernBarmaidV1Impl>(1, [this](SP<Hyprwire::IObject> obj) {
+    barmaidImpl = makeShared<CHpHyprtavernBarmaidV1Impl>(MAID_PROTOCOL_VERSION, [this](SP<Hyprwire::IObject> obj) {
         auto manager = makeShared<CHpHyprtavernBarmaidManagerV1Object>(std::move(obj));
         auto perms   = permDataFor(manager->getObject()->client());
 
@@ -278,7 +199,7 @@ bool CCore::init(int fd) {
             return;
         }
 
-        auto x = m_object.barmaidManagers.emplace_back(manager); //
+        auto x = m_object.barmaidManagers.emplace_back(manager);
         if (m_object.ready)
             x->sendReady();
 
@@ -290,9 +211,13 @@ bool CCore::init(int fd) {
             }
 
             g_logger->log(LOG_DEBUG, "kv: updating environment with {} new values", names.size());
-
             for (size_t i = 0; i < names.size(); ++i) {
-                if (std::string_view{values[i]}.empty())
+                if (!names[i] || !*names[i]) {
+                    w->error(-1, "update_tavern_environment received an invalid name");
+                    return;
+                }
+
+                if (!values[i] || std::string_view{values[i]}.empty())
                     unsetenv(names[i]);
                 else
                     setenv(names[i], values[i], true);
@@ -305,21 +230,85 @@ bool CCore::init(int fd) {
     m_object.socket->addImplementation(kvImpl);
     m_object.socket->addImplementation(barmaidImpl);
 
-    int fds[2];
-    pipe(fds);
+    int fds[2] = {-1, -1};
+    if (pipe(fds) < 0) {
+        g_logger->log(LOG_ERR, "failed to create kv event pipe: {}", std::strerror(errno));
+        return false;
+    }
+
+    if (fcntl(fds[0], F_SETFD, FD_CLOEXEC) < 0 || fcntl(fds[1], F_SETFD, FD_CLOEXEC) < 0) {
+        g_logger->log(LOG_ERR, "failed to secure kv event pipe: {}", std::strerror(errno));
+        close(fds[0]);
+        close(fds[1]);
+        return false;
+    }
 
     m_kvEventWrite = Hyprutils::OS::CFileDescriptor{fds[1]};
     m_kvEvent      = Hyprutils::OS::CFileDescriptor{fds[0]};
 
-    m_kvEvent.setFlags(O_CLOEXEC);
-    m_kvEventWrite.setFlags(O_CLOEXEC);
+    static bool failedToExpose = false;
+    failedToExpose             = false;
+
+    m_tavern.busObject->setExposeProtocolError([](uint32_t err) { failedToExpose = true; });
+    m_tavern.busObject->setNewFd([this](int fd, const char* token, const auto&... protocolScopes) {
+        auto client = m_object.socket->addClient(fd);
+        if (!client) {
+            g_logger->log(LOG_ERR, "failed to connect client new fd {}", fd);
+            return;
+        }
+
+        std::vector<std::string> scope;
+        if constexpr (sizeof...(protocolScopes) > 0) {
+            auto appendScope = [&scope](const auto& protocolScope) {
+                scope.reserve(scope.size() + protocolScope.size());
+                for (const auto& protocol : protocolScope) {
+                    if (protocol)
+                        scope.emplace_back(protocol);
+                }
+            };
+            (appendScope(protocolScopes), ...);
+
+            if (!scope.empty())
+                client->setProtocolFilter([scope = std::move(scope)](std::string_view protocol) {
+                    return std::ranges::any_of(scope, [protocol](const auto& permitted) { return permitted == protocol; });
+                });
+        }
+
+        auto principal       = permDataFor(client);
+        principal->tokenUsed = token ? token : "";
+        if (principal->tokenUsed.empty()) {
+            g_logger->log(LOG_ERR, "incoming fd {} has no security token; APP_VALUE will be unavailable", fd);
+            return;
+        }
+
+        principal->securityResponse = makeShared<CCHpHyprtavernSecurityResponseV1Object>(m_tavern.manager->sendGetSecurityResponse(principal->tokenUsed.c_str()));
+        principal->securityResponse->setPermissions([principal = WP<SPermData>{principal}, fd](const std::vector<uint32_t>& perms) {
+            auto locked = principal.lock();
+            if (!locked)
+                return;
+            g_logger->log(LOG_DEBUG, "incoming fd {} has {} perms", fd, perms.size());
+            locked->permissions = perms;
+        });
+        registerAppIdentifierCallback(principal->securityResponse, principal, fd);
+
+        m_tavern.socket->roundtrip();
+        principal->securityResponse->sendDestroy();
+        m_tavern.socket->roundtrip();
+        principal->securityResponse.reset();
+    });
+
+    m_tavern.busObject->sendExposeProtocol("hp_hyprtavern_kv_store_v1", KV_PROTOCOL_VERSION, {}, 1);
+    m_tavern.busObject->sendExposeProtocol("hp_hyprtavern_barmaid_v1", MAID_PROTOCOL_VERSION, {HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_TYPE_TAVERNKEEP}, 0);
+    m_tavern.socket->roundtrip();
+
+    if (failedToExpose) {
+        g_logger->log(LOG_ERR, "failed to expose kv protocol (is a kv manager running?)");
+        return false;
+    }
 
     g_logger->log(LOG_DEBUG, "kv: ready!");
     sendReady();
-
-    // init kv in the meantime if we can
     m_kv.init();
-
     return true;
 }
 
@@ -331,11 +320,16 @@ void CCore::drainFd(Hyprutils::OS::CFileDescriptor& fd) {
     };
 
     while (fd.isValid()) {
-        poll(&pfd, 1, 0);
+        if (poll(&pfd, 1, 0) < 0 && errno != EINTR)
+            return;
 
         if (pfd.revents & POLLIN) {
-            read(fd.get(), buf, 127);
-            continue;
+            ssize_t bytes = 0;
+            do {
+                bytes = read(fd.get(), buf, sizeof(buf));
+            } while (bytes < 0 && errno == EINTR);
+            if (bytes > 0)
+                continue;
         }
 
         break;
@@ -360,7 +354,9 @@ void CCore::run() {
 
     while (true) {
         if (poll(fds, 3, -1) < 0) {
-            g_logger->log(LOG_ERR, "poll() failed");
+            if (errno == EINTR)
+                continue;
+            g_logger->log(LOG_ERR, "poll() failed: {}", std::strerror(errno));
             return;
         }
 
@@ -373,14 +369,14 @@ void CCore::run() {
 
         if (fds[1].revents & POLLIN) {
             if (!m_object.socket->dispatchEvents()) {
-                g_logger->log(LOG_ERR, "servur socket fd dispatch failed");
+                g_logger->log(LOG_ERR, "server socket fd dispatch failed");
                 return;
             }
         }
 
         if (fds[2].revents & POLLIN) {
-            m_kv.onEvent();
             drainFd(m_kvEvent);
+            m_kv.onEvent();
         }
 
         if (fds[0].revents & (POLLHUP | POLLERR | POLLNVAL)) {
@@ -389,7 +385,7 @@ void CCore::run() {
         }
 
         if (fds[1].revents & (POLLHUP | POLLERR | POLLNVAL)) {
-            g_logger->log(LOG_ERR, "servur socket fd died");
+            g_logger->log(LOG_ERR, "server socket fd died");
             return;
         }
 
@@ -401,31 +397,32 @@ void CCore::run() {
 }
 
 void CCore::sendKvOpen() {
-    for (const auto& m : m_object.managers) {
-        m->sendOpen();
+    for (const auto& manager : m_object.managers) {
+        manager->sendOpen();
     }
 }
 
-void CCore::removeObject(CManagerObject* r) {
-    std::erase_if(m_object.managers, [r](const auto& e) { return e.get() == r; });
+void CCore::removeObject(CManagerObject* removed) {
+    std::erase_if(m_object.managers, [removed](const auto& manager) { return manager.get() == removed; });
 }
 
-SPermData* CCore::permDataFor(SP<Hyprwire::IServerClient> c) {
-    for (auto& d : m_permDatas) {
-        if (d.client != c)
-            continue;
+SP<SPermData> CCore::permDataFor(SP<Hyprwire::IServerClient> client) {
+    std::erase_if(m_permDatas, [](const auto& data) { return !data || !data->client; });
 
-        return &d;
+    for (const auto& data : m_permDatas) {
+        if (data->client == client)
+            return data;
     }
 
-    m_permDatas.emplace_back(SPermData{.client = c});
-
-    return &m_permDatas.back();
+    auto data    = makeShared<SPermData>();
+    data->client = client;
+    m_permDatas.emplace_back(data);
+    return data;
 }
 
 void CCore::sendReady() {
     m_object.ready = true;
-    for (const auto& m : m_object.barmaidManagers) {
-        m->sendReady();
+    for (const auto& manager : m_object.barmaidManagers) {
+        manager->sendReady();
     }
 }

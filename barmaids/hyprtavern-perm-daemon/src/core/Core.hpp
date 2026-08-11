@@ -6,10 +6,14 @@
 #include <hp_hyprtavern_permission_authentication_v1-server.hpp>
 #include <hp_hyprtavern_barmaid_v1-server.hpp>
 
+#include <unordered_map>
+
 struct SPermData {
     WP<Hyprwire::IServerClient> client;
     std::string                 tokenUsed;
+    std::string                 appIdentifier;
     std::vector<uint32_t>       permissions;
+    bool                        appIdentifierPersistent = false;
 };
 
 class CTransactionObject {
@@ -27,14 +31,14 @@ class CTransactionObject {
 class CManagerObject {
   public:
     CManagerObject(SP<CHpHyprtavernPermissionAuthenticationManagerV1Object>&& obj);
-    ~CManagerObject();
+    ~CManagerObject() = default;
 
     void sendAvailability(bool x);
 
   private:
     SP<CHpHyprtavernPermissionAuthenticationManagerV1Object> m_object;
 
-    SPermData                                                m_perms;
+    SP<SPermData>                                            m_perms;
 };
 
 class CCore {
@@ -68,8 +72,9 @@ class CCore {
         std::vector<SP<CHpHyprtavernBarmaidManagerV1Object>> barmaids;
     } m_object;
 
-    std::vector<SPermData> m_permDatas;
-    SPermData*             permDataFor(SP<Hyprwire::IServerClient>);
+    std::unordered_map<Hyprwire::IServerClient*, SP<SPermData>> m_permDatas;
+    SP<SPermData>                                               permDataFor(const SP<Hyprwire::IServerClient>&);
+    void                                                        cleanupPermData();
 
     friend class CManagerObject;
 };

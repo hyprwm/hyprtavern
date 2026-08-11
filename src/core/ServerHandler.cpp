@@ -1,207 +1,441 @@
 #include "ServerHandler.hpp"
+
+#include "BarmaidConnector.hpp"
 #include "BarmaidProcess.hpp"
 #include "ProtocolHandler.hpp"
 
 #include "../helpers/Logger.hpp"
 
-#include <filesystem>
-#include <fstream>
-#include <cstdlib>
-#include <thread>
+#include <algorithm>
+#include <cerrno>
+#include <chrono>
+#include <cstring>
+#include <format>
 #include <future>
-#include <memory>
+#include <string>
+#include <thread>
 
-#include <sys/signal.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <sys/file.h>
 #include <sys/socket.h>
-#include <sys/fcntl.h>
-#include <sys/poll.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
-#include <hyprutils/os/File.hpp>
-#include <hyprutils/os/FileDescriptor.hpp>
+namespace {
+    constexpr const char*        SOCKET_FILE_NAME = "ht.sock";
+    constexpr const char*        LOCK_FILE_NAME   = ".ht-lock";
+    constexpr std::array<int, 3> HANDLED_SIGNALS  = {SIGTERM, SIGINT, SIGCHLD};
 
-constexpr const char* SOCKET_FILE_NAME = "ht.sock";
-constexpr const char* LOCK_FILE_NAME   = ".ht-lock";
+    volatile sig_atomic_t        g_signalWriteFd        = -1;
+    volatile sig_atomic_t        g_terminationRequested = 0;
+    volatile sig_atomic_t        g_childChanged         = 0;
 
-//
-static std::string runtimeDir() {
-    static auto ENV = getenv("XDG_RUNTIME_DIR");
-    if (!ENV)
-        return "";
-    return ENV;
-};
+    void                         onLifecycleSignal(int signal) {
+        const int SAVED_ERRNO = errno;
 
-static void onSignal(int sig) {
-    if (g_serverHandler)
-        g_serverHandler->exit();
+        if (signal == SIGCHLD)
+            g_childChanged = 1;
+        else
+            g_terminationRequested = 1;
+
+        const int fd = static_cast<int>(g_signalWriteFd);
+        if (fd >= 0) {
+            const unsigned char value = static_cast<unsigned char>(signal);
+            const ssize_t       ret   = write(fd, &value, sizeof(value));
+            (void)ret;
+        }
+
+        errno = SAVED_ERRNO;
+    }
+
+    bool setCloseOnExec(int fd) {
+        const int FLAGS = fcntl(fd, F_GETFD);
+        return FLAGS >= 0 && fcntl(fd, F_SETFD, FLAGS | FD_CLOEXEC) >= 0;
+    }
+
+    bool setNonBlocking(int fd) {
+        const int FLAGS = fcntl(fd, F_GETFL);
+        return FLAGS >= 0 && fcntl(fd, F_SETFL, FLAGS | O_NONBLOCK) >= 0;
+    }
+
+    bool writeAll(int fd, const std::string& data) {
+        size_t written = 0;
+        while (written < data.size()) {
+            const ssize_t ret = write(fd, data.data() + written, data.size() - written);
+            if (ret > 0) {
+                written += static_cast<size_t>(ret);
+                continue;
+            }
+            if (ret < 0 && errno == EINTR)
+                continue;
+            return false;
+        }
+        return true;
+    }
+
+    void writeWakeByte(int fd) {
+        if (fd < 0)
+            return;
+
+        const unsigned char value = 0;
+        while (write(fd, &value, sizeof(value)) < 0 && errno == EINTR) {}
+    }
+
+    void drainFd(int fd) {
+        char buffer[128];
+        while (fd >= 0) {
+            const ssize_t bytes = read(fd, buffer, sizeof(buffer));
+            if (bytes > 0)
+                continue;
+            if (bytes < 0 && errno == EINTR)
+                continue;
+            break;
+        }
+    }
 }
 
-void CServerHandler::exit() {
-    m_exit = true;
+CServerHandler::COwnedFD::COwnedFD(int fd) : m_fd(fd) {}
+
+CServerHandler::COwnedFD::~COwnedFD() {
+    reset();
+}
+
+CServerHandler::COwnedFD::COwnedFD(COwnedFD&& other) noexcept : m_fd(other.release()) {}
+
+CServerHandler::COwnedFD& CServerHandler::COwnedFD::operator=(COwnedFD&& other) noexcept {
+    if (this != &other)
+        reset(other.release());
+    return *this;
+}
+
+int CServerHandler::COwnedFD::get() const {
+    return m_fd;
+}
+
+int CServerHandler::COwnedFD::release() {
+    const int fd = m_fd;
+    m_fd         = -1;
+    return fd;
+}
+
+void CServerHandler::COwnedFD::reset(int fd) {
+    if (m_fd >= 0)
+        close(m_fd);
+    m_fd = fd;
+}
+
+bool CServerHandler::COwnedFD::valid() const {
+    return m_fd >= 0;
 }
 
 CServerHandler::CServerHandler() {
-    signal(SIGCHLD, SIG_IGN);
-
-    const auto RUNTIME_DIR = runtimeDir();
-
-    if (RUNTIME_DIR.empty()) {
+    const char* runtimeDir = getenv("XDG_RUNTIME_DIR");
+    if (!runtimeDir || !*runtimeDir) {
         g_logger->log(LOG_ERR, "XDG_RUNTIME_DIR needs to be set");
-        ::exit(1);
         return;
     }
 
-    if (isAlreadyRunning()) {
-        g_logger->log(LOG_ERR, "refusing to run: hyprtavern already running for the current user");
-        ::exit(1);
-        return;
-    }
+    m_runtimeDir = std::filesystem::path{std::string{runtimeDir}} / "hyprtavern";
+    m_lockPath   = m_runtimeDir / LOCK_FILE_NAME;
+    m_socketPath = m_runtimeDir / SOCKET_FILE_NAME;
 
-    if (!createLockFile()) {
-        g_logger->log(LOG_ERR, "refusing to run: failed to create a lock file");
-        ::exit(1);
+    if (!acquireRuntimeLock())
         return;
-    }
 
-    const auto      SOCK_PATH = std::filesystem::path(RUNTIME_DIR) / "hyprtavern" / SOCKET_FILE_NAME;
+    if (!setupLifecyclePipe() || !installSignalHandlers())
+        return;
 
     std::error_code ec;
-    std::filesystem::remove(SOCK_PATH, ec);
-
-    m_socket = Hyprwire::IServerSocket::open(SOCK_PATH.string());
-
-    if (!m_socket) {
-        g_logger->log(LOG_ERR, "refusing to run: failed to open a socket");
-        ::exit(1);
+    std::filesystem::remove(m_socketPath, ec);
+    if (ec) {
+        g_logger->log(LOG_ERR, "failed to remove stale socket at {}: {}", m_socketPath.string(), ec.message());
         return;
     }
 
-    signal(SIGTERM, ::onSignal);
-    signal(SIGINT, ::onSignal);
+    m_socket = Hyprwire::IServerSocket::open(m_socketPath.string());
+    if (!m_socket) {
+        g_logger->log(LOG_ERR, "refusing to run: failed to open socket at {}", m_socketPath.string());
+        return;
+    }
 
     g_coreProto = makeUnique<CCoreProtocolHandler>();
     if (!g_coreProto->init(m_socket)) {
         g_logger->log(LOG_ERR, "refusing to run: failed to init proto");
-        ::exit(1);
+        m_socket.reset();
         return;
     }
+
+    m_good = true;
 }
 
 CServerHandler::~CServerHandler() {
+    m_good = false;
+    m_exit.store(true, std::memory_order_relaxed);
     terminateBarmaids();
     m_socket.reset();
     removeFiles();
+    restoreSignalHandlers();
+    m_lifecycleWriteFd.reset();
+    m_lifecycleReadFd.reset();
+    m_lockFd.reset();
+}
+
+bool CServerHandler::acquireRuntimeLock() {
+    std::error_code ec;
+    if (!std::filesystem::exists(m_runtimeDir, ec)) {
+        ec.clear();
+        const bool CREATED = std::filesystem::create_directory(m_runtimeDir, ec);
+        if (ec || (!CREATED && !std::filesystem::is_directory(m_runtimeDir, ec)) || ec) {
+            g_logger->log(LOG_ERR, "failed to create runtime directory at {}: {}", m_runtimeDir.string(), ec.message());
+            return false;
+        }
+    } else if (ec || !std::filesystem::is_directory(m_runtimeDir, ec) || ec) {
+        g_logger->log(LOG_ERR, "runtime path is not an accessible directory: {}", m_runtimeDir.string());
+        return false;
+    }
+
+    COwnedFD lockFd{open(m_lockPath.c_str(), O_RDWR | O_CREAT, S_IRUSR | S_IWUSR)};
+    if (!lockFd.valid()) {
+        g_logger->log(LOG_ERR, "failed to open lock file at {}: {}", m_lockPath.string(), std::strerror(errno));
+        return false;
+    }
+
+    if (!setCloseOnExec(lockFd.get())) {
+        g_logger->log(LOG_ERR, "failed to set lock file close-on-exec: {}", std::strerror(errno));
+        return false;
+    }
+
+    if (flock(lockFd.get(), LOCK_EX | LOCK_NB) < 0) {
+        if (errno == EWOULDBLOCK || errno == EAGAIN)
+            g_logger->log(LOG_ERR, "refusing to run: hyprtavern is already running for the current user");
+        else
+            g_logger->log(LOG_ERR, "failed to lock {}: {}", m_lockPath.string(), std::strerror(errno));
+        return false;
+    }
+
+    if (ftruncate(lockFd.get(), 0) < 0 || lseek(lockFd.get(), 0, SEEK_SET) < 0 || !writeAll(lockFd.get(), std::format("{}\n", getpid()))) {
+        g_logger->log(LOG_ERR, "failed to write lock file at {}: {}", m_lockPath.string(), std::strerror(errno));
+        return false;
+    }
+
+    m_lockFd = std::move(lockFd);
+    return true;
+}
+
+bool CServerHandler::setupLifecyclePipe() {
+    int fds[2] = {-1, -1};
+    if (pipe(fds) < 0) {
+        g_logger->log(LOG_ERR, "failed to create lifecycle self-pipe: {}", std::strerror(errno));
+        return false;
+    }
+
+    COwnedFD readFd{fds[0]};
+    COwnedFD writeFd{fds[1]};
+    if (!setCloseOnExec(readFd.get()) || !setCloseOnExec(writeFd.get()) || !setNonBlocking(readFd.get()) || !setNonBlocking(writeFd.get())) {
+        g_logger->log(LOG_ERR, "failed to configure lifecycle self-pipe: {}", std::strerror(errno));
+        return false;
+    }
+
+    m_lifecycleReadFd  = std::move(readFd);
+    m_lifecycleWriteFd = std::move(writeFd);
+    return true;
+}
+
+bool CServerHandler::installSignalHandlers() {
+    struct sigaction action{};
+    sigemptyset(&action.sa_mask);
+    action.sa_handler = onLifecycleSignal;
+    action.sa_flags   = 0;
+
+    g_terminationRequested = 0;
+    g_childChanged         = 0;
+    g_signalWriteFd        = static_cast<sig_atomic_t>(m_lifecycleWriteFd.get());
+
+    size_t installed = 0;
+    for (; installed < HANDLED_SIGNALS.size(); ++installed) {
+        if (sigaction(HANDLED_SIGNALS[installed], &action, &m_previousSignalActions[installed]) == 0)
+            continue;
+
+        const int SIGNAL_ERRNO = errno;
+        while (installed > 0) {
+            --installed;
+            sigaction(HANDLED_SIGNALS[installed], &m_previousSignalActions[installed], nullptr);
+        }
+        g_signalWriteFd = -1;
+        errno           = SIGNAL_ERRNO;
+        g_logger->log(LOG_ERR, "failed to install lifecycle signal handlers: {}", std::strerror(errno));
+        return false;
+    }
+
+    m_signalHandlersInstalled = true;
+    return true;
+}
+
+void CServerHandler::restoreSignalHandlers() {
+    if (!m_signalHandlersInstalled)
+        return;
+
+    g_signalWriteFd = -1;
+    for (size_t i = 0; i < HANDLED_SIGNALS.size(); ++i) {
+        if (sigaction(HANDLED_SIGNALS[i], &m_previousSignalActions[i], nullptr) < 0)
+            g_logger->log(LOG_WARN, "failed to restore signal {} handler: {}", HANDLED_SIGNALS[i], std::strerror(errno));
+    }
+    m_signalHandlersInstalled = false;
+}
+
+void CServerHandler::exit() {
+    m_exit.store(true, std::memory_order_relaxed);
+    wakeEventLoop();
+}
+
+void CServerHandler::wakeEventLoop() const {
+    writeWakeByte(m_lifecycleWriteFd.get());
+}
+
+void CServerHandler::drainLifecyclePipe() {
+    drainFd(m_lifecycleReadFd.get());
+
+    if (g_terminationRequested) {
+        g_terminationRequested = 0;
+        m_exit.store(true, std::memory_order_relaxed);
+    }
+
+    if (g_childChanged) {
+        g_childChanged      = 0;
+        const size_t REAPED = reapBarmaids();
+        if (REAPED > 0 && !m_exit.load(std::memory_order_relaxed)) {
+            g_logger->log(LOG_ERR, "a barmaid exited unexpectedly");
+            m_childFailure = true;
+            m_exit.store(true, std::memory_order_relaxed);
+        }
+    }
 }
 
 bool CServerHandler::run() {
+    if (!m_good || !m_socket || !g_coreProto)
+        return false;
+
     if (!launchBarmaids()) {
         g_logger->log(LOG_ERR, "refusing to run: failed to launch barmaids");
         return false;
     }
 
-    int initWakeFds[2];
+    int initWakeFds[2] = {-1, -1};
     if (pipe(initWakeFds) < 0) {
-        g_logger->log(LOG_ERR, "failed to create barmaid init wake pipe");
+        g_logger->log(LOG_ERR, "failed to create barmaid init wake pipe: {}", std::strerror(errno));
+        terminateBarmaids();
         return false;
     }
 
-    Hyprutils::OS::CFileDescriptor initWake{initWakeFds[0]}, initWakeWrite{initWakeFds[1]};
-    initWake.setFlags(O_CLOEXEC);
-    initWakeWrite.setFlags(O_CLOEXEC);
+    COwnedFD initWakeRead{initWakeFds[0]};
+    COwnedFD initWakeWrite{initWakeFds[1]};
+    if (!setCloseOnExec(initWakeRead.get()) || !setCloseOnExec(initWakeWrite.get()) || !setNonBlocking(initWakeRead.get()) || !setNonBlocking(initWakeWrite.get())) {
+        g_logger->log(LOG_ERR, "failed to configure barmaid init wake pipe: {}", std::strerror(errno));
+        terminateBarmaids();
+        return false;
+    }
 
-    constexpr size_t MAIN_FD = 0;
-    constexpr size_t INIT_FD = 1;
-    constexpr size_t KV_FD   = 2;
-    constexpr size_t PD_FD   = 3;
+    constexpr size_t      MAIN_FD      = 0;
+    constexpr size_t      LIFECYCLE_FD = 1;
+    constexpr size_t      INIT_FD      = 2;
+    constexpr size_t      KV_FD        = 3;
+    constexpr size_t      PD_FD        = 4;
 
-    pollfd           fds[4] = {
-        pollfd{
-            .fd     = m_socket->extractLoopFD(),
-            .events = POLLIN,
-        },
-        pollfd{
-            .fd     = initWake.get(),
-            .events = POLLIN,
-        },
-        pollfd{
-            .revents = 0,
-        },
-        pollfd{
-            .revents = 0,
-        },
+    std::array<pollfd, 5> fds = {
+        pollfd{.fd = m_socket->extractLoopFD(), .events = POLLIN, .revents = 0},
+        pollfd{.fd = m_lifecycleReadFd.get(), .events = POLLIN, .revents = 0},
+        pollfd{.fd = initWakeRead.get(), .events = POLLIN, .revents = 0},
+        pollfd{.fd = -1, .events = POLLIN, .revents = 0},
+        pollfd{.fd = -1, .events = POLLIN, .revents = 0},
     };
 
-    bool barmaidInitCommenced = false, barmaidInitDone = false;
+    constexpr auto     STARTUP_TIMEOUT    = std::chrono::seconds(30);
+    const auto         STARTUP_DEADLINE   = std::chrono::steady_clock::now() + STARTUP_TIMEOUT;
+    bool               success            = true;
+    bool               barmaidInitStarted = false;
+    bool               barmaidInitDone    = false;
+    std::promise<bool> initPromise;
+    std::future<bool>  initFuture = initPromise.get_future();
+    std::jthread       initThread;
 
-    struct SBarmaidInitState {
-        std::promise<bool> result;
-        int                wakeFd = -1;
-    };
+    auto               processInitResult = [&]() {
+        if (!barmaidInitStarted || barmaidInitDone || initFuture.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+            return;
 
-    auto              barmaidInitState  = std::make_shared<SBarmaidInitState>();
-    std::future<bool> barmaidInitFuture = barmaidInitState->result.get_future();
-
-    auto              drainWakeFd = [&initWake] {
-        char buf[128];
-        while (initWake.isValid() && initWake.isReadable()) {
-            const auto BYTES = read(initWake.get(), buf, sizeof(buf));
-            if (BYTES <= 0)
-                break;
-        }
-    };
-
-    auto processBarmaidInitResult = [&]() -> bool {
-        if (barmaidInitDone || !barmaidInitCommenced || barmaidInitFuture.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
-            return true;
-
-        drainWakeFd();
-
+        const bool INIT_OK = initFuture.get();
+        if (initThread.joinable())
+            initThread.join();
         barmaidInitDone = true;
-        if (!barmaidInitFuture.get()) {
+        drainFd(initWakeRead.get());
+
+        if (!INIT_OK || !g_coreProto->m_client.kvSock || !g_coreProto->m_client.pdSock) {
             g_logger->log(LOG_ERR, "barmaid init failed");
-            exit();
-            return false;
+            success = false;
+            m_exit.store(true, std::memory_order_relaxed);
+            return;
         }
 
-        fds[KV_FD].fd     = g_coreProto->m_client.kvSock->extractLoopFD();
-        fds[KV_FD].events = POLLIN;
-
-        fds[PD_FD].fd     = g_coreProto->m_client.pdSock->extractLoopFD();
-        fds[PD_FD].events = POLLIN;
+        // The future and join publish all m_client writes before readiness is exposed.
+        g_coreProto->m_barmaidsReady = true;
+        fds[KV_FD].fd                = g_coreProto->m_client.kvSock->extractLoopFD();
+        fds[PD_FD].fd                = g_coreProto->m_client.pdSock->extractLoopFD();
 
         g_logger->log(LOG_DEBUG, "barmaid init finished");
         g_coreProto->sendReady();
-        return true;
     };
 
-    while (!m_exit) {
-        const nfds_t NFDS = barmaidInitDone ? 4 : (barmaidInitCommenced ? 2 : 1);
+    while (!m_exit.load(std::memory_order_relaxed)) {
+        processInitResult();
+        if (m_exit.load(std::memory_order_relaxed))
+            break;
 
-        if (poll(fds, NFDS, -1) < 0) {
-            g_logger->log(LOG_ERR, "poll() failed");
-            exit();
-            return false;
+        if (!barmaidInitDone && std::chrono::steady_clock::now() >= STARTUP_DEADLINE) {
+            g_logger->log(LOG_ERR, "barmaid startup timed out");
+            success = false;
+            break;
         }
 
-        // TODO: restrict new clients connecting until barmaids are init'd
+        const int TIMEOUT = !barmaidInitDone ? 250 : -1;
+        const int RET     = poll(fds.data(), static_cast<nfds_t>(fds.size()), TIMEOUT);
+        if (RET < 0) {
+            if (errno == EINTR) {
+                drainLifecyclePipe();
+                continue;
+            }
+            g_logger->log(LOG_ERR, "poll() failed: {}", std::strerror(errno));
+            success = false;
+            break;
+        }
 
-        if (barmaidInitCommenced && fds[INIT_FD].revents & POLLIN)
-            drainWakeFd();
+        if (fds[LIFECYCLE_FD].revents & POLLIN)
+            drainLifecyclePipe();
+        if (fds[LIFECYCLE_FD].revents & (POLLHUP | POLLERR | POLLNVAL)) {
+            g_logger->log(LOG_ERR, "lifecycle self-pipe died");
+            success = false;
+            break;
+        }
+        if (m_exit.load(std::memory_order_relaxed))
+            break;
 
-        if (!processBarmaidInitResult())
-            return false;
-
-        if (barmaidInitCommenced && !barmaidInitDone && fds[INIT_FD].revents & (POLLERR | POLLNVAL)) {
+        if (fds[INIT_FD].revents & POLLIN)
+            drainFd(initWakeRead.get());
+        if (fds[INIT_FD].revents & (POLLHUP | POLLERR | POLLNVAL)) {
             g_logger->log(LOG_ERR, "barmaid init wake fd died");
-            exit();
-            return false;
+            success = false;
+            break;
         }
+
+        processInitResult();
+        if (m_exit.load(std::memory_order_relaxed))
+            break;
 
         if (fds[MAIN_FD].revents & POLLIN) {
             if (!m_socket->dispatchEvents()) {
                 g_logger->log(LOG_ERR, "socket fd dispatch failed");
-                exit();
-                return false;
+                success = false;
+                break;
             }
 
             if (barmaidInitDone)
@@ -211,224 +445,170 @@ bool CServerHandler::run() {
         if (barmaidInitDone && fds[KV_FD].revents & POLLIN) {
             if (!g_coreProto->m_client.kvSock->dispatchEvents()) {
                 g_logger->log(LOG_ERR, "kv fd dispatch failed");
-                exit();
-                return false;
+                success = false;
+                break;
             }
         }
 
         if (barmaidInitDone && fds[PD_FD].revents & POLLIN) {
             if (!g_coreProto->m_client.pdSock->dispatchEvents()) {
                 g_logger->log(LOG_ERR, "pd fd dispatch failed");
-                exit();
-                return false;
+                success = false;
+                break;
             }
         }
 
-        // TODO: this should be done better
-        if (!barmaidInitCommenced && g_coreProto->m_managers.size() >= 2 /* kv_store and pd */) {
-            barmaidInitCommenced = true;
+        const auto internalClientCount = std::ranges::count_if(g_coreProto->m_internalClients, [](const auto& client) { return static_cast<bool>(client); });
+        if (!barmaidInitStarted && internalClientCount >= 3) { // Internal core client plus both launched barmaids.
+            barmaidInitStarted = true;
+            initThread         = std::jthread([&initPromise, wakeFd = initWakeWrite.get()](std::stop_token stopToken) {
+                CBarmaidConnector::setThreadStopToken(stopToken);
 
-            barmaidInitState->wakeFd = dup(initWakeWrite.get());
-            if (barmaidInitState->wakeFd < 0) {
-                g_logger->log(LOG_ERR, "failed to duplicate barmaid init wake fd");
-                exit();
-                return false;
-            }
-
-            std::thread t([state = barmaidInitState] {
-                state->result.set_value(g_coreProto->initBarmaids());
-                if (state->wakeFd >= 0) {
-                    const auto WRITTEN = write(state->wakeFd, "x", 1);
-                    (void)WRITTEN;
-                    close(state->wakeFd);
+                bool result = false;
+                try {
+                    result = !stopToken.stop_requested() && g_coreProto->initKv();
+                    result = result && !stopToken.stop_requested() && g_coreProto->initPd();
+                    result = result && !stopToken.stop_requested();
+                    initPromise.set_value(result);
+                } catch (...) {
+                    try {
+                        initPromise.set_value(false);
+                    } catch (...) {}
                 }
+
+                CBarmaidConnector::setThreadStopToken({});
+                writeWakeByte(wakeFd);
             });
-            t.detach();
         }
 
-        if (!processBarmaidInitResult())
-            return false;
+        processInitResult();
+        if (m_exit.load(std::memory_order_relaxed))
+            break;
 
         if (fds[MAIN_FD].revents & (POLLHUP | POLLERR | POLLNVAL)) {
             g_logger->log(LOG_ERR, "socket fd died");
-            return true;
+            break;
         }
 
         if (barmaidInitDone && fds[KV_FD].revents & (POLLHUP | POLLERR | POLLNVAL)) {
             g_logger->log(LOG_ERR, "kv fd died");
-            exit();
-            return false;
+            success = false;
+            break;
         }
 
         if (barmaidInitDone && fds[PD_FD].revents & (POLLHUP | POLLERR | POLLNVAL)) {
             g_logger->log(LOG_ERR, "pd fd died");
-            exit();
-            return false;
+            success = false;
+            break;
         }
     }
 
-    return true;
-}
-
-bool CServerHandler::isAlreadyRunning() {
-    const std::filesystem::path RUNTIME_DIR = runtimeDir();
-
-    std::error_code             ec;
-    if (!std::filesystem::exists(RUNTIME_DIR / "hyprtavern", ec) || ec)
-        return false;
-
-    if (!std::filesystem::exists(RUNTIME_DIR / "hyprtavern/.ht-lock", ec) || ec)
-        return false;
-
-    const auto FILE_CONTENT = Hyprutils::File::readFileAsString((RUNTIME_DIR / "hyprtavern" / LOCK_FILE_NAME).string());
-
-    if (!FILE_CONTENT) {
-        g_logger->log(LOG_ERR, "Refusing to continue: lockfile exists but inaccessible: error {}", FILE_CONTENT.error());
-        ::exit(1);
-    }
-
-    try {
-        int pid = std::stoi(*FILE_CONTENT);
-        if (::kill(pid, 0) == 0)
-            return true;
-
-        if (errno == EPERM)
-            return true;
-
-        return false;
-    } catch (...) {
-        g_logger->log(LOG_ERR, "Refusing to continue: lockfile corrupt");
-        ::exit(1);
-    }
-
-    return false; // unreachable
-}
-
-bool CServerHandler::createLockFile() {
-    const std::filesystem::path RUNTIME_DIR = runtimeDir();
-
-    std::error_code             ec;
-    if (!std::filesystem::exists(RUNTIME_DIR / "hyprtavern", ec) || ec) {
-        std::filesystem::create_directory(RUNTIME_DIR / "hyprtavern", ec);
-
-        if (ec) {
-            g_logger->log(LOG_ERR, "Failed to create the lockfile dir at {}: {}", (RUNTIME_DIR / "hyprtavern").string(), ec.message());
-            return false;
+    if (initThread.joinable()) {
+        initThread.request_stop();
+        if (!barmaidInitDone) {
+            if (g_coreProto->m_client.sock)
+                shutdown(g_coreProto->m_client.sock->extractLoopFD(), SHUT_RDWR);
+            terminateBarmaids();
         }
+        initThread.join();
     }
 
-    std::ofstream ofs(RUNTIME_DIR / "hyprtavern" / LOCK_FILE_NAME, std::ios::trunc);
-    if (!ofs.good()) {
-        g_logger->log(LOG_ERR, "Failed to open a lockfile at {}", (RUNTIME_DIR / "hyprtavern" / LOCK_FILE_NAME).string());
-        return false;
-    }
-
-    ofs << getpid() << std::endl;
-    ofs.close();
-
-    return true;
+    return success && !m_childFailure;
 }
 
 void CServerHandler::removeFiles() {
-    const std::filesystem::path RUNTIME_DIR = runtimeDir();
+    if (m_socketPath.empty())
+        return;
 
-    std::error_code             ec;
-    std::filesystem::remove(RUNTIME_DIR / "hyprtavern" / LOCK_FILE_NAME, ec);
-
+    std::error_code ec;
+    std::filesystem::remove(m_socketPath, ec);
     if (ec)
-        g_logger->log(LOG_ERR, "failed to remove lock file");
+        g_logger->log(LOG_ERR, "failed to remove socket file at {}: {}", m_socketPath.string(), ec.message());
 
-    std::filesystem::remove(RUNTIME_DIR / "hyprtavern" / SOCKET_FILE_NAME, ec);
+    // The lock file intentionally persists: unlinking a flock file permits a second inode
+    // to be locked before this process has released the original lock.
+}
 
-    if (ec)
-        g_logger->log(LOG_ERR, "failed to remove socket file");
+size_t CServerHandler::reapBarmaids() {
+    size_t reaped = 0;
+
+    std::erase_if(m_barmaidPids, [&reaped](pid_t pid) {
+        int   status = 0;
+        pid_t ret    = -1;
+        do {
+            ret = waitpid(pid, &status, WNOHANG);
+        } while (ret < 0 && errno == EINTR);
+
+        if (ret == 0)
+            return false;
+        if (ret == pid) {
+            ++reaped;
+            if (WIFEXITED(status))
+                g_logger->log(LOG_WARN, "barmaid pid {} exited with status {}", pid, WEXITSTATUS(status));
+            else if (WIFSIGNALED(status))
+                g_logger->log(LOG_WARN, "barmaid pid {} exited from signal {}", pid, WTERMSIG(status));
+            return true;
+        }
+        if (ret < 0 && errno != ECHILD)
+            g_logger->log(LOG_WARN, "failed to inspect barmaid pid {}: {}", pid, std::strerror(errno));
+        return ret < 0 && errno == ECHILD;
+    });
+
+    return reaped;
 }
 
 void CServerHandler::terminateBarmaids() {
-    for (const auto& pid : m_barmaidPids) {
+    for (const pid_t pid : m_barmaidPids)
         CBarmaidProcess::terminate(pid);
-    }
-
     m_barmaidPids.clear();
 }
 
-bool CServerHandler::good() {
-    return !!m_socket;
+bool CServerHandler::good() const {
+    return m_good && !!m_socket;
 }
 
 bool CServerHandler::launchBarmaids() {
-
-    // ----------------- KV ----------------- //
-    {
-        int fds[2];
+    auto launch = [this](const std::string& app, const char* description) {
+        int fds[2] = {-1, -1};
         if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) < 0) {
-            g_logger->log(LOG_ERR, "failed to create a socketpair");
+            g_logger->log(LOG_ERR, "failed to create socketpair for {}: {}", app, std::strerror(errno));
             return false;
         }
 
-        fcntl(fds[0], F_SETFD, FD_CLOEXEC);
-
-        auto pid = CBarmaidProcess::launch("hyprtavern-kv", {"--fd", std::format("{}", fds[1])});
-
-        close(fds[1]);
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-        if (!CBarmaidProcess::isRunning(pid)) {
-            close(fds[0]);
-            terminateBarmaids();
+        COwnedFD serverFd{fds[0]};
+        COwnedFD childFd{fds[1]};
+        if (!setCloseOnExec(serverFd.get())) {
+            g_logger->log(LOG_ERR, "failed to set parent socket close-on-exec for {}: {}", app, std::strerror(errno));
             return false;
         }
+
+        const pid_t pid = CBarmaidProcess::launch(app, {"--fd", std::format("{}", childFd.get())});
+        childFd.reset();
+        if (pid <= 0)
+            return false;
 
         m_barmaidPids.emplace_back(pid);
 
-        auto client = m_socket->addClient(fds[0]);
+        const int clientFd = serverFd.release();
+        auto      client   = m_socket->addClient(clientFd);
         if (!client) {
-            close(fds[0]);
-            terminateBarmaids();
+            close(clientFd);
             return false;
         }
 
         g_coreProto->registerInternalClient(client);
+        g_logger->log(LOG_DEBUG, "{} started with pid {}", description, pid);
+        return true;
+    };
 
-        g_logger->log(LOG_DEBUG, "hyprtavern-kv started");
+    if (!launch("hyprtavern-kv", "hyprtavern-kv")) {
+        terminateBarmaids();
+        return false;
     }
 
-    // ----------------- PD ----------------- //
-    {
-        int fds[2];
-        if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) < 0) {
-            g_logger->log(LOG_ERR, "failed to create a socketpair");
-            terminateBarmaids();
-            return false;
-        }
-
-        fcntl(fds[0], F_SETFD, FD_CLOEXEC);
-
-        auto pid = CBarmaidProcess::launch("hyprtavern-perm-daemon", {"--fd", std::format("{}", fds[1])});
-
-        close(fds[1]);
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-        if (!CBarmaidProcess::isRunning(pid)) {
-            close(fds[0]);
-            terminateBarmaids();
-            return false;
-        }
-
-        m_barmaidPids.emplace_back(pid);
-
-        auto client = m_socket->addClient(fds[0]);
-        if (!client) {
-            close(fds[0]);
-            terminateBarmaids();
-            return false;
-        }
-
-        g_coreProto->registerInternalClient(client);
-
-        g_logger->log(LOG_DEBUG, "hyprtavern-pd started");
+    if (!launch("hyprtavern-perm-daemon", "hyprtavern-pd")) {
+        terminateBarmaids();
+        return false;
     }
 
     return true;

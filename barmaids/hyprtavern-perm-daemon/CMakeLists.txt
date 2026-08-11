@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.19)
 
-file(GLOB_RECURSE PD_SRCFILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/protocols/*.cpp")
+file(GLOB_RECURSE PD_SRCFILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
+set(PD_PROTOCOLS_DIR "${CMAKE_CURRENT_BINARY_DIR}/protocols")
+file(MAKE_DIRECTORY "${PD_PROTOCOLS_DIR}")
 
 add_executable(hyprtavern-perm-daemon ${PD_SRCFILES})
 
@@ -20,15 +22,16 @@ function(hyprprotocolServer protoPath protoName external)
   else()
     set(path ${HYPRWIRE_PROTOCOLS_DIR}/${protoPath})
   endif()
+  set(xml "${path}/${protoName}.xml")
   add_custom_command(
-    OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/protocols/${protoName}-server.cpp
-           ${CMAKE_CURRENT_SOURCE_DIR}/protocols/${protoName}-server.hpp
-    COMMAND hyprwire-scanner ${path}/${protoName}.xml
-            ${CMAKE_CURRENT_SOURCE_DIR}/protocols/
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
-  target_sources(hyprtavern-perm-daemon PRIVATE protocols/${protoName}-server.cpp
-                                   protocols/${protoName}-server.hpp
-                                   )
+    OUTPUT "${PD_PROTOCOLS_DIR}/${protoName}-server.cpp"
+           "${PD_PROTOCOLS_DIR}/${protoName}-server.hpp"
+    COMMAND "${HYPRWIRE_SCANNER_EXECUTABLE}" "${xml}" "${PD_PROTOCOLS_DIR}"
+    DEPENDS "${xml}" "${HYPRWIRE_SCANNER_EXECUTABLE}"
+    VERBATIM)
+  target_sources(hyprtavern-perm-daemon PRIVATE
+    "${PD_PROTOCOLS_DIR}/${protoName}-server.cpp"
+    "${PD_PROTOCOLS_DIR}/${protoName}-server.hpp")
 endfunction()
 
 function(hyprprotocol protoPath protoName external)
@@ -37,22 +40,23 @@ function(hyprprotocol protoPath protoName external)
   else()
     set(path ${HYPRWIRE_PROTOCOLS_DIR}/${protoPath})
   endif()
+  set(xml "${path}/${protoName}.xml")
   add_custom_command(
-    OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/protocols/${protoName}-client.cpp
-           ${CMAKE_CURRENT_SOURCE_DIR}/protocols/${protoName}-client.hpp
-    COMMAND hyprwire-scanner --client ${path}/${protoName}.xml
-            ${CMAKE_CURRENT_SOURCE_DIR}/protocols/
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
-  target_sources(hyprtavern-perm-daemon PRIVATE protocols/${protoName}-client.cpp
-                                   protocols/${protoName}-client.hpp
-                                   )
+    OUTPUT "${PD_PROTOCOLS_DIR}/${protoName}-client.cpp"
+           "${PD_PROTOCOLS_DIR}/${protoName}-client.hpp"
+    COMMAND "${HYPRWIRE_SCANNER_EXECUTABLE}" --client "${xml}" "${PD_PROTOCOLS_DIR}"
+    DEPENDS "${xml}" "${HYPRWIRE_SCANNER_EXECUTABLE}"
+    VERBATIM)
+  target_sources(hyprtavern-perm-daemon PRIVATE
+    "${PD_PROTOCOLS_DIR}/${protoName}-client.cpp"
+    "${PD_PROTOCOLS_DIR}/${protoName}-client.hpp")
 endfunction()
 
 hyprprotocol(hyprtavern hp_hyprtavern_core_v1 false)
 hyprprotocolServer(hyprtavern hp_hyprtavern_permission_authentication_v1 false)
 hyprprotocolServer(hyprtavern hp_hyprtavern_barmaid_v1 false)
 
-target_include_directories(hyprtavern-perm-daemon PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/protocols" ${pd_deps_INCLUDE_DIRS})
+target_include_directories(hyprtavern-perm-daemon PRIVATE "${PD_PROTOCOLS_DIR}" ${pd_deps_INCLUDE_DIRS})
 
 target_link_libraries(hyprtavern-perm-daemon PkgConfig::deps PkgConfig::pd_deps)
 

@@ -42,7 +42,7 @@ static std::optional<std::string> run() {
     if (!backend)
         backend = IBackend::create();
 
-    static std::string chosenPw = "";
+    auto chosenPw = makeShared<std::optional<std::string>>();
 
     if (!backend) {
         g_logger->log(LOG_ERR, "toolkit: failed to open a dialog");
@@ -89,8 +89,8 @@ static std::optional<std::string> run() {
 
     buttons.emplace_back(CButtonBuilder::begin()
                              ->label("Done")
-                             ->onMainClick([w = WP<IWindow>{window}](auto) {
-                                 chosenPw = state.textbox->currentText();
+                             ->onMainClick([w = WP<IWindow>{window}, chosenPw](auto) {
+                                 *chosenPw = state.textbox->currentText();
 
                                  if (w)
                                      w->close();
@@ -105,9 +105,9 @@ static std::optional<std::string> run() {
 
     null2->setGrow(true);
 
-    window->m_events.keyboardKey.listenStatic([w = WP<IWindow>{window}](Input::SKeyboardKeyEvent ev) {
+    window->m_events.keyboardKey.listenStatic([w = WP<IWindow>{window}, chosenPw](Input::SKeyboardKeyEvent ev) {
         if (ev.xkbKeysym == XKB_KEY_Return) {
-            chosenPw = state.textbox->currentText();
+            *chosenPw = state.textbox->currentText();
 
             if (w)
                 w->close();
@@ -128,7 +128,8 @@ static std::optional<std::string> run() {
     layout->addChild(layout2);
 
     window->m_events.closeRequest.listenStatic([w = WP<IWindow>{window}] {
-        w->close();
+        if (w)
+            w->close();
         backend->destroy();
     });
 
@@ -138,7 +139,7 @@ static std::optional<std::string> run() {
 
     backend->enterLoop();
 
-    return chosenPw;
+    return *chosenPw;
 }
 
 std::expected<std::string, std::string> GUI::passwordAsk() {
@@ -150,5 +151,5 @@ std::expected<std::string, std::string> GUI::passwordAsk() {
     if (RET)
         return *RET;
 
-    return std::unexpected("could not open a window");
+    return std::unexpected("password entry cancelled");
 }

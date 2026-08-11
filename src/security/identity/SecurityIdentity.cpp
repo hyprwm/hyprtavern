@@ -4,7 +4,6 @@
 
 using namespace Security;
 
-UP<ISecurityIdentityProvider> Security::identify(SP<Hyprwire::IServerClient> client) {
-    // FIXME: flatpak!!
-    return makeUnique<CNaiveSecurityIdentityProvider>(client);
+UP<ISecurityIdentityProvider> Security::identify(SP<Hyprwire::IServerClient> client, ePrincipalAuthority authority) {
+    return makeUnique<CNaiveSecurityIdentityProvider>(client, authority);
 }

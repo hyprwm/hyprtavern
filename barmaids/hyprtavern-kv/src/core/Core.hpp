@@ -11,9 +11,12 @@
 #include <hyprutils/os/FileDescriptor.hpp>
 
 struct SPermData {
-    WP<Hyprwire::IServerClient> client;
-    std::string                 tokenUsed;
-    std::vector<uint32_t>       permissions;
+    WP<Hyprwire::IServerClient>                client;
+    std::string                                tokenUsed;
+    std::vector<uint32_t>                      permissions;
+    std::optional<std::string>                 appIdentifier;
+    bool                                       appIdentifierPersistent = false;
+    SP<CCHpHyprtavernSecurityResponseV1Object> securityResponse;
 };
 
 class CManagerObject {
@@ -24,14 +27,8 @@ class CManagerObject {
     void sendOpen();
 
   private:
-    void                                    getAppBinary();
-
     SP<CHpHyprtavernKvStoreManagerV1Object> m_object;
-
-    SPermData                               m_perms;
-    int                                     m_pid = -1;
-
-    std::string                             m_appBinary = "anonymous";
+    SP<SPermData>                           m_perms;
 };
 
 class CCore {
@@ -48,8 +45,6 @@ class CCore {
 
     void                           removeObject(CManagerObject*);
     void                           sendKvOpen();
-
-    std::future<bool>&             initFuture();
 
     Hyprutils::OS::CFileDescriptor m_kvEvent, m_kvEventWrite;
 
@@ -70,10 +65,10 @@ class CCore {
         bool                                                 ready = false;
     } m_object;
 
-    CKvStore               m_kv;
+    CKvStore                   m_kv;
 
-    std::vector<SPermData> m_permDatas;
-    SPermData*             permDataFor(SP<Hyprwire::IServerClient>);
+    std::vector<SP<SPermData>> m_permDatas;
+    SP<SPermData>              permDataFor(SP<Hyprwire::IServerClient>);
 
     friend class CManagerObject;
 };

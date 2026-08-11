@@ -38,23 +38,20 @@ CTransactionObject::CTransactionObject(SP<CHpHyprtavernPermissionAuthenticationT
 
         m_inert = true;
 
-        const auto RESULT = GUI::permissionAsk(m_appName, m_appID);
+        const auto RESULT = GUI::permissionAsk(m_appName, m_appID, perm, type);
 
         if (!RESULT) {
             m_object->sendPermissionResult(perm, HP_HYPRTAVERN_PERMISSION_AUTHENTICATION_V1_RESPONSE_TYPE_UNAVAILABLE);
             return;
         }
 
-        if (!*RESULT) {
-            m_object->sendPermissionResult(perm, HP_HYPRTAVERN_PERMISSION_AUTHENTICATION_V1_RESPONSE_TYPE_DENIED);
-            return;
+        switch (*RESULT) {
+            case GUI::PERMISSION_CHOICE_DENY: m_object->sendPermissionResult(perm, HP_HYPRTAVERN_PERMISSION_AUTHENTICATION_V1_RESPONSE_TYPE_DENIED); return;
+            case GUI::PERMISSION_CHOICE_ALLOW_ONCE: m_object->sendPermissionResult(perm, HP_HYPRTAVERN_PERMISSION_AUTHENTICATION_V1_RESPONSE_TYPE_ACCEPTED_ONCE); return;
+            case GUI::PERMISSION_CHOICE_ALLOW_ALWAYS: m_object->sendPermissionResult(perm, HP_HYPRTAVERN_PERMISSION_AUTHENTICATION_V1_RESPONSE_TYPE_ACCEPTED_PERSISTENT); return;
         }
 
-        m_object->sendPermissionResult(perm,
-                                       type == HP_HYPRTAVERN_PERMISSION_AUTHENTICATION_V1_ASK_TYPE_PERSIST ?
-                                           HP_HYPRTAVERN_PERMISSION_AUTHENTICATION_V1_RESPONSE_TYPE_ACCEPTED_PERSISTENT :
-                                           HP_HYPRTAVERN_PERMISSION_AUTHENTICATION_V1_RESPONSE_TYPE_ACCEPTED_ONCE);
-        return;
+        m_object->sendPermissionResult(perm, HP_HYPRTAVERN_PERMISSION_AUTHENTICATION_V1_RESPONSE_TYPE_DENIED);
     });
 }
 
@@ -64,10 +61,9 @@ CManagerObject::CManagerObject(SP<CHpHyprtavernPermissionAuthenticationManagerV1
 
     m_object->setOnDestroy([this]() { g_core->removeObject(this); });
 
-    if (const auto PERM = g_core->permDataFor(m_object->getObject()->client()); PERM)
-        m_perms = *PERM;
+    m_perms = g_core->permDataFor(m_object->getObject()->client());
 
-    if (!hasTavernkeep(m_perms.permissions)) {
+    if (!m_perms || !hasTavernkeep(m_perms->permissions)) {
         m_object->error(-1, "permission authentication protocol requires tavernkeep");
         return;
     }
@@ -79,18 +75,6 @@ CManagerObject::CManagerObject(SP<CHpHyprtavernPermissionAuthenticationManagerV1
             makeShared<CTransactionObject>(         //
                 makeShared<CHpHyprtavernPermissionAuthenticationTransactionV1Object>(g_core->m_object.socket->createObject(
                     m_object->getObject()->client(), m_object->getObject(), CHpHyprtavernPermissionAuthenticationTransactionV1Object::name(), seq))));
-    });
-}
-
-CManagerObject::~CManagerObject() {
-    std::erase_if(g_core->m_permDatas, [this](const auto& e) {
-        if (!e.client)
-            return true;
-
-        if (m_object && m_object->getObject() && m_object->getObject()->client())
-            return e.client == m_object->getObject()->client();
-
-        return false;
     });
 }
 
@@ -122,58 +106,13 @@ bool CCore::init(int fd) {
 
     m_tavern.manager = makeShared<CCHpHyprtavernCoreManagerV1Object>(m_tavern.socket->bindProtocol(impl->protocol(), TAVERN_PROTOCOL_VERSION));
 
-    // set up our object
+    // Set up the internal server before exposing anything that can dispatch new_fd.
+    m_object.socket = Hyprwire::IServerSocket::open();
 
-    m_tavern.busObject = makeShared<CCHpHyprtavernBusObjectV1Object>(m_tavern.manager->sendGetBusObject("hyprtavern-perm-daemon"));
-
-    m_tavern.busObject->sendRequirePermissions({HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_TYPE_TAVERNKEEP});
-    m_tavern.busObject->sendExposeProtocol("hp_hyprtavern_permission_authentication_v1", PD_PROTOCOL_VERSION, {HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_TYPE_TAVERNKEEP}, 1);
-    m_tavern.busObject->sendExposeProtocol("hp_hyprtavern_barmaid_v1", MAID_PROTOCOL_VERSION, {HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_TYPE_TAVERNKEEP}, 0);
-
-    static bool failedToExpose = false;
-
-    m_tavern.busObject->setExposeProtocolError([](uint32_t err) { failedToExpose = true; });
-    m_tavern.busObject->setNewFd([this](int fd, const char* token, const std::vector<const char*>& protocolScope) {
-        auto x = m_object.socket->addClient(fd);
-
-        if (!x) {
-            g_logger->log(LOG_ERR, "failed to connect client new fd {}", fd);
-            return;
-        }
-
-        std::vector<std::string> scope;
-        scope.reserve(protocolScope.size());
-        for (const auto& p : protocolScope) {
-            scope.emplace_back(p);
-        }
-
-        x->setProtocolFilter([scope = std::move(scope)](std::string_view protocol) { return std::ranges::any_of(scope, [protocol](const auto& p) { return p == protocol; }); });
-
-        auto permData       = permDataFor(x);
-        permData->tokenUsed = token;
-
-        if (!permData->tokenUsed.empty()) {
-            // get the perms from the bus
-            auto response = makeShared<CCHpHyprtavernSecurityResponseV1Object>(m_tavern.manager->sendGetSecurityResponse(token));
-
-            response->setPermissions([permData, fd](const std::vector<uint32_t>& perms) {
-                g_logger->log(LOG_DEBUG, "incoming fd {} has {} perms", fd, perms.size());
-                permData->permissions = perms;
-            });
-
-            m_tavern.socket->roundtrip();
-        } else
-            g_logger->log(LOG_DEBUG, "incoming fd {} has no associated token", fd);
-    });
-
-    m_tavern.socket->roundtrip();
-
-    if (failedToExpose) {
-        g_logger->log(LOG_ERR, "failed to expose kv protocol (is a kv manager running?)");
+    if (!m_object.socket) {
+        g_logger->log(LOG_ERR, "failed to create permission daemon server socket");
         return false;
     }
-
-    m_object.socket = Hyprwire::IServerSocket::open();
 
     pdImpl = makeShared<CHpHyprtavernPermissionAuthenticationV1Impl>(1, [this](SP<Hyprwire::IObject> obj) {
         auto x = m_object.managers.emplace_back(makeShared<CManagerObject>(makeShared<CHpHyprtavernPermissionAuthenticationManagerV1Object>(std::move(obj)))); //
@@ -200,19 +139,85 @@ bool CCore::init(int fd) {
                 return;
             }
 
-            g_logger->log(LOG_DEBUG, "kv: updating environment with {} new values", names.size());
+            g_logger->log(LOG_DEBUG, "pd: updating environment with {} new values", names.size());
+
+            bool displayEnvChanged = false;
 
             for (size_t i = 0; i < names.size(); ++i) {
                 if (std::string_view{values[i]}.empty())
                     unsetenv(names[i]);
                 else
                     setenv(names[i], values[i], true);
+
+                const std::string_view name = names[i];
+                displayEnvChanged           = displayEnvChanged || name == "DISPLAY" || name == "WAYLAND_DISPLAY";
             }
+
+            if (displayEnvChanged)
+                GUI::updateEnv();
         });
     });
 
     m_object.socket->addImplementation(pdImpl);
     m_object.socket->addImplementation(barmaidImpl);
+
+    // Set up our exposed bus object only after the server can accept and filter clients.
+    m_tavern.busObject = makeShared<CCHpHyprtavernBusObjectV1Object>(m_tavern.manager->sendGetBusObject("hyprtavern-perm-daemon"));
+
+    static bool failedToExpose = false;
+    failedToExpose             = false;
+
+    m_tavern.busObject->setExposeProtocolError([](uint32_t err) { failedToExpose = true; });
+    m_tavern.busObject->setNewFd([this](int fd, const char* token, const std::vector<const char*>& protocolScope) {
+        auto x = m_object.socket->addClient(fd);
+
+        if (!x) {
+            g_logger->log(LOG_ERR, "failed to connect client new fd {}", fd);
+            return;
+        }
+
+        std::vector<std::string> scope;
+        scope.reserve(protocolScope.size());
+        for (const auto& p : protocolScope) {
+            scope.emplace_back(p);
+        }
+
+        x->setProtocolFilter([scope = std::move(scope)](std::string_view protocol) { return std::ranges::any_of(scope, [protocol](const auto& p) { return p == protocol; }); });
+
+        auto permData       = permDataFor(x);
+        permData->tokenUsed = token;
+
+        if (!permData->tokenUsed.empty()) {
+            // Get the permissions and trusted identity metadata before dispatching this client.
+            auto response = makeShared<CCHpHyprtavernSecurityResponseV1Object>(m_tavern.manager->sendGetSecurityResponse(token));
+
+            response->setIdentity([permData, fd](uint32_t, const char* identifier, const char*) {
+                permData->appIdentifier           = identifier ? identifier : "";
+                permData->appIdentifierPersistent = identifier && *identifier;
+                g_logger->log(LOG_DEBUG, "incoming fd {} identifies as {}", fd, permData->appIdentifier);
+            });
+            response->setPermissions([permData, fd](const std::vector<uint32_t>& perms) {
+                g_logger->log(LOG_DEBUG, "incoming fd {} has {} perms", fd, perms.size());
+                permData->permissions = perms;
+            });
+
+            m_tavern.socket->roundtrip();
+            response->sendDestroy();
+            m_tavern.socket->roundtrip();
+        } else
+            g_logger->log(LOG_DEBUG, "incoming fd {} has no associated token", fd);
+    });
+
+    m_tavern.busObject->sendRequirePermissions({HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_TYPE_TAVERNKEEP});
+    m_tavern.busObject->sendExposeProtocol("hp_hyprtavern_permission_authentication_v1", PD_PROTOCOL_VERSION, {HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_TYPE_TAVERNKEEP}, 1);
+    m_tavern.busObject->sendExposeProtocol("hp_hyprtavern_barmaid_v1", MAID_PROTOCOL_VERSION, {HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_TYPE_TAVERNKEEP}, 0);
+
+    m_tavern.socket->roundtrip();
+
+    if (failedToExpose) {
+        g_logger->log(LOG_ERR, "failed to expose permission authentication protocol (is another permission daemon running?)");
+        return false;
+    }
 
     g_logger->log(LOG_DEBUG, "pd: ready!");
 
@@ -244,9 +249,12 @@ void CCore::run() {
 
         if (fds[1].revents & POLLIN) {
             if (!m_object.socket->dispatchEvents()) {
-                g_logger->log(LOG_ERR, "servur socket fd dispatch failed");
+                cleanupPermData();
+                g_logger->log(LOG_ERR, "server socket fd dispatch failed");
                 return;
             }
+
+            cleanupPermData();
         }
 
         if (fds[0].revents & (POLLHUP | POLLERR | POLLNVAL)) {
@@ -255,7 +263,7 @@ void CCore::run() {
         }
 
         if (fds[1].revents & (POLLHUP | POLLERR | POLLNVAL)) {
-            g_logger->log(LOG_ERR, "servur socket fd died");
+            g_logger->log(LOG_ERR, "server socket fd died");
             return;
         }
     }
@@ -269,17 +277,20 @@ void CCore::removeObject(CTransactionObject* r) {
     std::erase_if(m_object.transactions, [r](const auto& e) { return e.get() == r; });
 }
 
-SPermData* CCore::permDataFor(SP<Hyprwire::IServerClient> c) {
-    for (auto& d : m_permDatas) {
-        if (d.client != c)
-            continue;
+SP<SPermData> CCore::permDataFor(const SP<Hyprwire::IServerClient>& c) {
+    cleanupPermData();
 
-        return &d;
-    }
+    if (const auto IT = m_permDatas.find(c.get()); IT != m_permDatas.end())
+        return IT->second;
 
-    m_permDatas.emplace_back(SPermData{.client = c});
+    auto data    = makeShared<SPermData>();
+    data->client = c;
+    m_permDatas.emplace(c.get(), data);
+    return data;
+}
 
-    return &m_permDatas.back();
+void CCore::cleanupPermData() {
+    std::erase_if(m_permDatas, [](const auto& e) { return !e.second || !e.second->client; });
 }
 
 void CCore::updateAvailability(bool x) {

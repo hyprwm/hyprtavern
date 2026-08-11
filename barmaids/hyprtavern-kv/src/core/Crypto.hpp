@@ -26,11 +26,14 @@ namespace Crypto {
         CEncryptedBlob()  = delete;
         ~CEncryptedBlob() = default;
 
-        CEncryptedBlob(const CEncryptedBlob&) = delete;
-        CEncryptedBlob(CEncryptedBlob&)       = delete;
+        CEncryptedBlob(const CEncryptedBlob&)            = delete;
+        CEncryptedBlob& operator=(const CEncryptedBlob&) = delete;
+        CEncryptedBlob(CEncryptedBlob&&)                 = default;
+        CEncryptedBlob& operator=(CEncryptedBlob&&)      = default;
 
         // is the blob ok?
-        eCryptoResult result();
+        eCryptoResult result() const;
+        uint8_t       version() const;
 
         // write encrypted blob to file
         std::expected<void, std::string> writeToFile(const std::filesystem::path& path);
@@ -44,6 +47,8 @@ namespace Crypto {
         std::vector<uint8_t> m_salt, m_iv, m_cipher, m_tag;
 
         std::string          m_data;
+        uint32_t             m_kdfIterations = 0;
+        uint8_t              m_version       = 0;
 
         eCryptoResult        m_result = CRYPTO_RESULT_GENERIC_ERROR;
     };

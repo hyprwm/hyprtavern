@@ -29,7 +29,7 @@ pkg_check_modules(
   uuid
 )
 
-find_package(glaze 6.0.0 QUIET)
+find_package(glaze CONFIG QUIET)
 if (NOT glaze_FOUND)
     set(GLAZE_VERSION v6.1.0)
     message(STATUS "glaze dependency not found, retrieving ${GLAZE_VERSION} with FetchContent")
@@ -56,16 +56,21 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
 if(CMAKE_BUILD_TYPE MATCHES Debug OR CMAKE_BUILD_TYPE MATCHES DEBUG)
   message(STATUS "Configuring hyprtavern in Debug")
   add_compile_definitions(HYPRLAUNCHER_DEBUG)
+  set(BUILD_TESTING ON)
 else()
   add_compile_options(-O3)
   message(STATUS "Configuring hyprtavern in Release")
+  set(BUILD_TESTING OFF)
 endif()
 
-file(GLOB_RECURSE SRCFILES CONFIGURE_DEPENDS "src/*.cpp" "protocols/*.cpp" "include/*.hpp")
+file(GLOB_RECURSE SRCFILES CONFIGURE_DEPENDS "src/*.cpp" "include/*.hpp")
 
 add_executable(hyprtavern ${SRCFILES})
 
 pkg_get_variable(HYPRWIRE_PROTOCOLS_DIR hyprwire-protocols pkgdatadir)
+find_program(HYPRWIRE_SCANNER_EXECUTABLE NAMES hyprwire-scanner REQUIRED)
+set(HYPRWIRE_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/protocols")
+file(MAKE_DIRECTORY "${HYPRWIRE_GENERATED_DIR}")
 message(STATUS "Found hyprwire-protocols at ${HYPRWIRE_PROTOCOLS_DIR}")
 
 function(hyprprotocolServer protoPath protoName external)
@@ -74,15 +79,16 @@ function(hyprprotocolServer protoPath protoName external)
   else()
     set(path ${HYPRWIRE_PROTOCOLS_DIR}/${protoPath})
   endif()
+  set(xml "${path}/${protoName}.xml")
   add_custom_command(
-    OUTPUT ${CMAKE_SOURCE_DIR}/protocols/${protoName}-server.cpp
-           ${CMAKE_SOURCE_DIR}/protocols/${protoName}-server.hpp
-    COMMAND hyprwire-scanner ${path}/${protoName}.xml
-            ${CMAKE_SOURCE_DIR}/protocols/
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
-  target_sources(hyprtavern PRIVATE protocols/${protoName}-server.cpp
-                                   protocols/${protoName}-server.hpp
-                                   )
+    OUTPUT "${HYPRWIRE_GENERATED_DIR}/${protoName}-server.cpp"
+           "${HYPRWIRE_GENERATED_DIR}/${protoName}-server.hpp"
+    COMMAND "${HYPRWIRE_SCANNER_EXECUTABLE}" "${xml}" "${HYPRWIRE_GENERATED_DIR}"
+    DEPENDS "${xml}" "${HYPRWIRE_SCANNER_EXECUTABLE}"
+    VERBATIM)
+  target_sources(hyprtavern PRIVATE
+    "${HYPRWIRE_GENERATED_DIR}/${protoName}-server.cpp"
+    "${HYPRWIRE_GENERATED_DIR}/${protoName}-server.hpp")
 endfunction()
 
 function(hyprprotocol protoPath protoName external)
@@ -91,15 +97,16 @@ function(hyprprotocol protoPath protoName external)
   else()
     set(path ${HYPRWIRE_PROTOCOLS_DIR}/${protoPath})
   endif()
+  set(xml "${path}/${protoName}.xml")
   add_custom_command(
-    OUTPUT ${CMAKE_SOURCE_DIR}/protocols/${protoName}-client.cpp
-           ${CMAKE_SOURCE_DIR}/protocols/${protoName}-client.hpp
-    COMMAND hyprwire-scanner --client ${path}/${protoName}.xml
-            ${CMAKE_SOURCE_DIR}/protocols/
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
-  target_sources(hyprtavern PRIVATE protocols/${protoName}-client.cpp
-                                   protocols/${protoName}-client.hpp
-                                   )
+    OUTPUT "${HYPRWIRE_GENERATED_DIR}/${protoName}-client.cpp"
+           "${HYPRWIRE_GENERATED_DIR}/${protoName}-client.hpp"
+    COMMAND "${HYPRWIRE_SCANNER_EXECUTABLE}" --client "${xml}" "${HYPRWIRE_GENERATED_DIR}"
+    DEPENDS "${xml}" "${HYPRWIRE_SCANNER_EXECUTABLE}"
+    VERBATIM)
+  target_sources(hyprtavern PRIVATE
+    "${HYPRWIRE_GENERATED_DIR}/${protoName}-client.cpp"
+    "${HYPRWIRE_GENERATED_DIR}/${protoName}-client.hpp")
 endfunction()
 
 hyprprotocolServer(hyprtavern hp_hyprtavern_core_v1 false)
@@ -109,7 +116,7 @@ hyprprotocol(hyprtavern hp_hyprtavern_kv_store_v1 false)
 hyprprotocol(hyprtavern hp_hyprtavern_barmaid_v1 false)
 hyprprotocol(hyprtavern hp_hyprtavern_permission_authentication_v1 false)
 
-target_include_directories(hyprtavern PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/protocols")
+target_include_directories(hyprtavern PRIVATE "${HYPRWIRE_GENERATED_DIR}")
 
 target_link_libraries(hyprtavern PkgConfig::deps glaze::glaze)
 
@@ -117,5 +124,24 @@ add_subdirectory(tools/hyprtavern-spy)
 add_subdirectory(tools/hyprtavern-env)
 add_subdirectory(barmaids/hyprtavern-kv)
 add_subdirectory(barmaids/hyprtavern-perm-daemon)
+
+if(BUILD_TESTING)
+  message(STATUS "building tests is enabled")
+
+  find_package(GTest CONFIG REQUIRED)
+  include(GoogleTest)
+  file(GLOB_RECURSE TESTFILES CONFIGURE_DEPENDS "tests/*.cpp")
+  add_executable(hyprtavern_tests
+    ${TESTFILES}
+    src/security/Permissions.cpp
+    "${HYPRWIRE_GENERATED_DIR}/hp_hyprtavern_core_v1-server.hpp")
+  target_include_directories(hyprtavern_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${HYPRWIRE_GENERATED_DIR}")
+  target_link_libraries(hyprtavern_tests PRIVATE GTest::gtest_main PkgConfig::deps)
+  gtest_discover_tests(hyprtavern_tests)
+else()
+  message(STATUS "building tests is disabled")
+endif()
 
 install(TARGETS hyprtavern)
