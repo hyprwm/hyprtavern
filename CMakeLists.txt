@@ -65,6 +65,12 @@ add_library(hyprtavern_common STATIC ${COMMON_SRCFILES})
 target_include_directories(hyprtavern_common PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(hyprtavern_common PUBLIC PkgConfig::deps)
 
+# the tavern, as a library so tests can link it
+file(GLOB_RECURSE SRCFILES CONFIGURE_DEPENDS "src/*.cpp")
+list(REMOVE_ITEM SRCFILES "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
+add_library(hyprtavern_lib STATIC ${SRCFILES})
+target_link_libraries(hyprtavern_lib PUBLIC hyprtavern_common glaze::glaze)
+
 if(BUILD_TESTING)
   message(STATUS "building tests is enabled")
 
@@ -73,7 +79,7 @@ if(BUILD_TESTING)
   file(GLOB_RECURSE TESTFILES CONFIGURE_DEPENDS "tests/*.cpp")
   add_executable(hyprtavern_tests ${TESTFILES})
   target_include_directories(hyprtavern_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-  target_link_libraries(hyprtavern_tests PRIVATE hyprtavern_common GTest::gtest_main)
+  target_link_libraries(hyprtavern_tests PRIVATE hyprtavern_lib GTest::gtest_main)
   gtest_discover_tests(hyprtavern_tests)
 else()
   message(STATUS "building tests is disabled")
