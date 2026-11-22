@@ -3,6 +3,8 @@
 #include "../security/PermissionContext.hpp"
 #include "../security/Policy.hpp"
 
+#include <common/Memory.hpp>
+
 #include <chrono>
 #include <cstdint>
 #include <optional>
@@ -51,4 +53,6 @@ namespace Bus {
 
         std::unordered_map<std::string, SEntry> m_tokens;
     };
+
+    inline UP<CPrincipalTokens> tokens;
 }

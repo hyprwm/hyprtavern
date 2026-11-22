@@ -71,6 +71,9 @@ list(REMOVE_ITEM SRCFILES "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
 add_library(hyprtavern_lib STATIC ${SRCFILES})
 target_link_libraries(hyprtavern_lib PUBLIC hyprtavern_common glaze::glaze)
 
+add_executable(hyprtavern src/main.cpp)
+target_link_libraries(hyprtavern hyprtavern_lib)
+
 if(BUILD_TESTING)
   message(STATUS "building tests is enabled")
 
@@ -84,3 +87,5 @@ if(BUILD_TESTING)
 else()
   message(STATUS "building tests is disabled")
 endif()
+
+install(TARGETS hyprtavern)

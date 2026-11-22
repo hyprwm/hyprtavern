@@ -2,6 +2,8 @@
 
 #include "../security/Identity.hpp"
 
+#include <common/Memory.hpp>
+
 #include <cstdint>
 #include <expected>
 #include <functional>
@@ -95,4 +97,6 @@ namespace Bus {
         std::map<uint32_t, SObject> m_objects;
         uint32_t                    m_nextID = 1;
     };
+
+    inline UP<CRegistry> registry;
 }
