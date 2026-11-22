@@ -80,6 +80,8 @@ add_executable(hyprtavern src/main.cpp)
 target_link_libraries(hyprtavern hyprtavern_lib)
 
 add_subdirectory(barmaids)
+add_subdirectory(tools/hyprtavern-spy)
+add_subdirectory(tools/hyprtavern-env)
 
 if(BUILD_TESTING)
   message(STATUS "building tests is enabled")

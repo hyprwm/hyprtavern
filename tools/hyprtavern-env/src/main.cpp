@@ -2,9 +2,9 @@
 #include <print>
 #include <algorithm>
 #include <hp_hyprtavern_core_v1-client.hpp>
-#include <hp_hyprtavern_kv_store_v1-client.hpp>
 
 #include <chrono>
+#include <optional>
 #include <thread>
 
 #include <hyprutils/cli/ArgumentParser.hpp>
@@ -23,22 +23,12 @@ using namespace Hyprutils::String;
         std::abort();                                                                                                                                                              \
     }
 
-constexpr const uint32_t                        PROTOCOL_VERSION    = 1;
-constexpr const uint32_t                        KV_PROTOCOL_VERSION = 1;
-constexpr const char*                           KV_TOKEN_NAME       = "core:security_token";
-constexpr const auto                            READY_TIMEOUT       = std::chrono::seconds(10);
-constexpr const auto                            PERMISSION_TIMEOUT  = std::chrono::seconds(30);
+constexpr const uint32_t                     PROTOCOL_VERSION = 1;
+constexpr const auto                         READY_TIMEOUT    = std::chrono::seconds(10);
 
-static SP<CCHpHyprtavernCoreV1Impl>             impl   = makeShared<CCHpHyprtavernCoreV1Impl>(PROTOCOL_VERSION);
-static SP<CCHpHyprtavernKvStoreV1Impl>          kvImpl = makeShared<CCHpHyprtavernKvStoreV1Impl>(KV_PROTOCOL_VERSION);
-static SP<CCHpHyprtavernCoreManagerV1Object>    manager;
-static SP<CCHpHyprtavernSecurityObjectV1Object> security;
-static SP<CCHpHyprtavernBusQueryV1Object>       query;
-static SP<Hyprwire::IClientSocket>              sock, kvSock;
-
-constexpr const std::array<const char*, 2>      ENV_FREE_TO_UPDATE = {"WAYLAND_DISPLAY", "DISPLAY"};
-
-static SP<CCHpHyprtavernKvStoreManagerV1Object> kvManager;
+static SP<CCHpHyprtavernCoreV1Impl>          impl = makeShared<CCHpHyprtavernCoreV1Impl>(PROTOCOL_VERSION);
+static SP<CCHpHyprtavernCoreManagerV1Object> manager;
+static SP<Hyprwire::IClientSocket>           sock;
 
 enum eUpdateMode : uint8_t {
     UPDATE_MODE_UPDATE,
@@ -73,114 +63,6 @@ static bool waitForReady() {
 
     manager->setReady([] {});
     return true;
-}
-
-static bool createNewSecurityObject(const std::string& token = "") {
-    security = makeShared<CCHpHyprtavernSecurityObjectV1Object>(manager->sendGetSecurityObject(token.c_str()));
-    security->sendSetIdentity("hyprtavern-env", "Hyprtavern env utility");
-    security->sendObtainPermission(HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_TYPE_MANAGEMENT_ENVIRONMENT, HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_MODE_PERMANENT);
-
-    security->setToken([](const char* tk) {
-        if (!kvManager)
-            return;
-
-        kvManager->sendSetValue(KV_TOKEN_NAME, tk, HP_HYPRTAVERN_KV_STORE_V1_VALUE_TYPE_APP_VALUE);
-    });
-
-    std::optional<bool> permissionDone;
-    bool                unavailable = false;
-
-    security->setPermissionResult([&permissionDone](uint32_t perm, uint32_t result) {
-        permissionDone = result == HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_RESULT_GRANTED_BY_POLICY || result == HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_RESULT_GRANTED ||
-            result == HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_RESULT_ALREADY_GRANTED;
-    });
-
-    security->setUnavailable([&unavailable] { unavailable = true; });
-
-    const auto started = std::chrono::steady_clock::now();
-    while (!permissionDone.has_value() && !unavailable && std::chrono::steady_clock::now() - started < PERMISSION_TIMEOUT) {
-        if (!sock->dispatchEvents(false)) {
-            std::println("err: transport failed while waiting for permission result");
-            return false;
-        }
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-
-    if (!permissionDone.has_value() && !unavailable) {
-        std::println("err: timed out waiting for permission result");
-        return false;
-    }
-
-    security->setPermissionResult([](uint32_t perm, uint32_t result) {});
-    security->setUnavailable([] {});
-
-    if (unavailable) {
-        std::println("err: permissions unavailable, can't update env");
-        return false;
-    }
-
-    if (!*permissionDone) {
-        std::println("warning: permission to manage bus env denied, can't update env");
-        return false;
-    }
-
-    return true;
-}
-
-static bool setupSecurityObject() {
-    // first, try to find our token in kv
-    auto kvQuery = makeShared<CCHpHyprtavernBusQueryV1Object>(manager->sendGetQueryObject({kvImpl->protocol()->specName().c_str()}, HP_HYPRTAVERN_CORE_V1_BUS_QUERY_FILTER_MODE_ALL,
-                                                                                          {}, HP_HYPRTAVERN_CORE_V1_BUS_QUERY_FILTER_MODE_ALL));
-
-    uint32_t objectId = 0;
-    kvQuery->setResults([&objectId](const std::vector<uint32_t>& res) {
-        if (res.empty())
-            return;
-
-        objectId = res[0];
-    });
-
-    sock->roundtrip();
-
-    if (objectId == 0)
-        return createNewSecurityObject();
-
-    auto       handle = makeShared<CCHpHyprtavernBusObjectHandleV1Object>(manager->sendGetObjectHandle(objectId));
-
-    const auto KV_PROTOCOL = kvImpl->protocol()->specName();
-    handle->sendConnect({KV_PROTOCOL.c_str()});
-
-    int fd = -1;
-
-    handle->setSocket([&fd](int f) { fd = f; });
-
-    sock->roundtrip();
-
-    if (fd < 0)
-        return createNewSecurityObject();
-
-    kvSock = Hyprwire::IClientSocket::open(fd);
-
-    kvSock->addImplementation(kvImpl);
-
-    if (!kvSock->waitForHandshake())
-        return createNewSecurityObject();
-
-    kvManager = makeShared<CCHpHyprtavernKvStoreManagerV1Object>(kvSock->bindProtocol(kvImpl->protocol(), KV_PROTOCOL_VERSION));
-
-    std::string valueObtained;
-
-    kvManager->sendGetValue(KV_TOKEN_NAME, HP_HYPRTAVERN_KV_STORE_V1_VALUE_TYPE_APP_VALUE);
-    kvManager->setValueObtained([&valueObtained](const char* k, const char* v, uint32_t type) { valueObtained = v; });
-
-    kvSock->roundtrip();
-
-    if (valueObtained.empty())
-        return createNewSecurityObject();
-
-    // create security object from this token
-    return createNewSecurityObject(valueObtained);
 }
 
 int main(int argc, const char** argv, char** envp) {
@@ -278,10 +160,9 @@ int main(int argc, const char** argv, char** envp) {
         return 1;
     }
 
-    const bool ANY_ENV_PROTECTED = !std::ranges::all_of(state.envNames, [](const auto& name) { return std::ranges::contains(ENV_FREE_TO_UPDATE, name); });
-
-    if (ANY_ENV_PROTECTED && !setupSecurityObject())
-        return 1;
+    // only verified, unsandboxed host apps may change the environment, no permission can be requested for it
+    std::optional<uint32_t> result;
+    manager->setUpdateTavernEnvironmentResult([&result](uint32_t r) { result = r; });
 
     {
         std::vector<const char*> names, values;
@@ -304,6 +185,11 @@ int main(int argc, const char** argv, char** envp) {
     }
 
     sock->roundtrip();
+
+    if (result != HP_HYPRTAVERN_CORE_V1_ENVIRONMENT_UPDATE_RESULT_APPLIED) {
+        std::println("err: the tavern denied the update, only unsandboxed apps may change its environment");
+        return 1;
+    }
 
     return 0;
 }

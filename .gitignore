@@ -22,11 +22,5 @@ build/
 .cache/
 .vscode/
 
-tools/hyprtavern-spy/protocols/*.cpp
-tools/hyprtavern-spy/protocols/*.hpp
-
-tools/hyprtavern-env/protocols/*.cpp
-tools/hyprtavern-env/protocols/*.hpp
-
 .direnv/
 .envrc

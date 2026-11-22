@@ -10,20 +10,23 @@ using namespace Hyprutils::Memory;
 
 #define SP CSharedPointer
 
-constexpr const uint32_t                        PROTOCOL_VERSION    = 1;
-constexpr const uint32_t                        KV_PROTOCOL_VERSION = 1;
-constexpr const char*                           KV_TOKEN_NAME       = "core:security_token";
-constexpr const auto                            READY_TIMEOUT       = std::chrono::seconds(10);
-constexpr const auto                            PERMISSION_TIMEOUT  = std::chrono::seconds(30);
+constexpr const uint32_t                           PROTOCOL_VERSION    = 1;
+constexpr const uint32_t                           KV_PROTOCOL_VERSION = 1;
+constexpr const char*                              KV_TOKEN_NAME       = "core:persistence-token";
+constexpr const auto                               READY_TIMEOUT       = std::chrono::seconds(10);
+constexpr const auto                               PERMISSION_TIMEOUT  = std::chrono::seconds(30);
 
-static SP<CCHpHyprtavernCoreV1Impl>             impl   = makeShared<CCHpHyprtavernCoreV1Impl>(PROTOCOL_VERSION);
-static SP<CCHpHyprtavernKvStoreV1Impl>          kvImpl = makeShared<CCHpHyprtavernKvStoreV1Impl>(KV_PROTOCOL_VERSION);
-static SP<CCHpHyprtavernCoreManagerV1Object>    manager;
-static SP<CCHpHyprtavernSecurityObjectV1Object> security;
-static SP<CCHpHyprtavernBusQueryV1Object>       query;
-static SP<Hyprwire::IClientSocket>              sock, kvSock;
+static SP<CCHpHyprtavernCoreV1Impl>                impl   = makeShared<CCHpHyprtavernCoreV1Impl>(PROTOCOL_VERSION);
+static SP<CCHpHyprtavernKvStoreV1Impl>             kvImpl = makeShared<CCHpHyprtavernKvStoreV1Impl>(KV_PROTOCOL_VERSION);
+static SP<CCHpHyprtavernCoreManagerV1Object>       manager;
+static SP<CCHpHyprtavernPermissionContextV1Object> security;
+static SP<CCHpHyprtavernBusQueryV1Object>          query;
+static SP<Hyprwire::IClientSocket>                 sock, kvSock;
 
-static SP<CCHpHyprtavernKvStoreManagerV1Object> kvManager;
+static SP<CCHpHyprtavernKvStoreManagerV1Object>    kvManager;
+
+// a failed lookup is not a missing token, so a saved one must not be replaced then
+static bool canSaveToken = false;
 
 //
 
@@ -49,12 +52,13 @@ static bool waitForReady() {
 }
 
 static bool createNewSecurityObject(const std::string& token = "") {
-    security = makeShared<CCHpHyprtavernSecurityObjectV1Object>(manager->sendGetSecurityObject(token.c_str()));
-    security->sendSetIdentity("hyprtavern-spy", "Hyprtavern spy utility");
-    security->sendObtainPermission(HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_TYPE_MONITORING_ALL_BUS_OBJECTS, HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_MODE_PERMANENT);
+    security = makeShared<CCHpHyprtavernPermissionContextV1Object>(manager->sendCreatePermissionContext(token.c_str()));
+    security->sendSetDisplayIdentity("hyprtavern-spy", "Hyprtavern spy utility");
+    security->sendRequestPermission("core.monitoring.sensitive.all_bus_objects", HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_MODE_PERMANENT);
 
-    security->setToken([](const char* tk) {
-        if (!kvManager)
+    security->setPersistenceToken([token](const char* tk) {
+        // an empty token means no saved context yet, it must not replace ours
+        if (!kvManager || !canSaveToken || !*tk || token == tk)
             return;
 
         kvManager->sendSetValue(KV_TOKEN_NAME, tk, HP_HYPRTAVERN_KV_STORE_V1_VALUE_TYPE_APP_VALUE);
@@ -63,7 +67,7 @@ static bool createNewSecurityObject(const std::string& token = "") {
     std::optional<bool> permissionDone;
     bool                unavailable = false;
 
-    security->setPermissionResult([&permissionDone](uint32_t perm, uint32_t result) {
+    security->setPermissionResult([&permissionDone](const char* perm, uint32_t result, uint32_t mode) {
         permissionDone = result == HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_RESULT_GRANTED_BY_POLICY || result == HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_RESULT_GRANTED ||
             result == HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_RESULT_ALREADY_GRANTED;
     });
@@ -85,7 +89,7 @@ static bool createNewSecurityObject(const std::string& token = "") {
         return false;
     }
 
-    security->setPermissionResult([](uint32_t perm, uint32_t result) {});
+    security->setPermissionResult([](const char* perm, uint32_t result, uint32_t mode) {});
     security->setUnavailable([] {});
 
     if (unavailable)
@@ -114,7 +118,10 @@ static bool setupSecurityObject() {
     if (objectId == 0)
         return createNewSecurityObject();
 
-    auto       handle = makeShared<CCHpHyprtavernBusObjectHandleV1Object>(manager->sendGetObjectHandle(objectId));
+    auto handle = makeShared<CCHpHyprtavernBusObjectHandleV1Object>(manager->sendGetObjectHandle(objectId));
+
+    // connect is only allowed after the snapshot is done
+    sock->roundtrip();
 
     const auto KV_PROTOCOL = kvImpl->protocol()->specName();
     handle->sendConnect({KV_PROTOCOL.c_str()});
@@ -140,7 +147,11 @@ static bool setupSecurityObject() {
     std::string valueObtained;
 
     kvManager->sendGetValue(KV_TOKEN_NAME, HP_HYPRTAVERN_KV_STORE_V1_VALUE_TYPE_APP_VALUE);
-    kvManager->setValueObtained([&valueObtained](const char* k, const char* v, uint32_t type) { valueObtained = v; });
+    kvManager->setValueObtained([&valueObtained](const char* k, const char* v, uint32_t type) {
+        valueObtained = v;
+        canSaveToken  = true;
+    });
+    kvManager->setValueFailed([](const char* k, uint32_t type, uint32_t reason) { canSaveToken = reason == HP_HYPRTAVERN_KV_STORE_V1_VALUE_OBTAINING_ERROR_VALUE_MISSING; });
 
     kvSock->roundtrip();
 
@@ -204,12 +215,13 @@ int main(int argc, char** argv, char** envp) {
         for (const auto& id : ids) {
             auto                     handle = makeShared<CCHpHyprtavernBusObjectHandleV1Object>(manager->sendGetObjectHandle(id));
 
-            std::string              name;
+            std::string              name, provider;
             std::vector<std::string> protocols;
             std::vector<uint32_t>    revs;
             std::vector<std::string> props;
 
             handle->setName([&name](const char* str) { name = str; });
+            handle->setProviderIdentity([&provider](const char* id, uint32_t kind, uint32_t stable) { provider = *id ? std::format("{} (kind {})", id, kind) : "unknown"; });
             handle->setProperties([&props](const std::vector<const char*>& p) {
                 for (const auto& pp : p) {
                     props.emplace_back(pp);
@@ -228,7 +240,8 @@ int main(int argc, char** argv, char** envp) {
             sock->roundtrip();
 
             std::println(" ┣╸{}#{}:", name, id);
-            std::println(" ┃   ┣╸protocols:", name, id);
+            std::println(" ┃   ┣╸provider: {}", provider);
+            std::println(" ┃   ┣╸protocols:");
             for (size_t i = 0; i < protocols.size(); ++i) {
                 std::println(" ┃   ┃   {}╸{}@{}", i == protocols.size() - 1 ? "┗" : "┣", protocols.at(i), revs.at(i));
             }
