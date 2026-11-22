@@ -1,260 +1,59 @@
-#include <hyprwire/hyprwire.hpp>
+#include <hyprtavern-client/hyprtavern-client.hpp>
+
+#include <hyprutils/memory/Casts.hpp>
+
+#include <format>
 #include <print>
-#include <hp_hyprtavern_core_v1-client.hpp>
-#include <hp_hyprtavern_kv_store_v1-client.hpp>
 
-#include <chrono>
-#include <thread>
-
+using namespace Hyprtavern;
 using namespace Hyprutils::Memory;
 
-#define SP CSharedPointer
+constexpr const char* MONITORING_PERMISSION = "core.monitoring.sensitive.all_bus_objects";
 
-constexpr const uint32_t                           PROTOCOL_VERSION    = 1;
-constexpr const uint32_t                           KV_PROTOCOL_VERSION = 1;
-constexpr const char*                              KV_TOKEN_NAME       = "core:persistence-token";
-constexpr const auto                               READY_TIMEOUT       = std::chrono::seconds(10);
-constexpr const auto                               PERMISSION_TIMEOUT  = std::chrono::seconds(30);
-
-static SP<CCHpHyprtavernCoreV1Impl>                impl   = makeShared<CCHpHyprtavernCoreV1Impl>(PROTOCOL_VERSION);
-static SP<CCHpHyprtavernKvStoreV1Impl>             kvImpl = makeShared<CCHpHyprtavernKvStoreV1Impl>(KV_PROTOCOL_VERSION);
-static SP<CCHpHyprtavernCoreManagerV1Object>       manager;
-static SP<CCHpHyprtavernPermissionContextV1Object> security;
-static SP<CCHpHyprtavernBusQueryV1Object>          query;
-static SP<Hyprwire::IClientSocket>                 sock, kvSock;
-
-static SP<CCHpHyprtavernKvStoreManagerV1Object>    kvManager;
-
-// a failed lookup is not a missing token, so a saved one must not be replaced then
-static bool canSaveToken = false;
-
-//
-
-static bool waitForReady() {
-    bool ready = false;
-    manager->setReady([&ready] { ready = true; });
-
-    const auto started = std::chrono::steady_clock::now();
-    while (!ready && std::chrono::steady_clock::now() - started < READY_TIMEOUT) {
-        if (!sock->dispatchEvents(false))
-            return false;
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+int                   main() {
+    const auto TAVERN = ITavern::open({.appName = "hyprtavern-spy", .appDescription = "Hyprtavern spy utility"});
+    if (!TAVERN) {
+        std::println("err: {}", errorString(TAVERN.error()));
+        return 1;
     }
 
-    if (!ready) {
-        std::println("err: timed out waiting for tavern ready event");
-        return false;
+    const auto& tavern = *TAVERN;
+
+    // without it, only objects visible to us are listed
+    const auto PERMISSIONS = tavern->requestPermissionsSync({MONITORING_PERMISSION}, ePermissionMode::PERMANENT);
+    if (!PERMISSIONS || PERMISSIONS->at(MONITORING_PERMISSION).result != ePermissionResult::GRANTED)
+        std::println("warning: permission to monitor all objects was not granted, results may be incomplete");
+
+    const auto OBJECTS = tavern->findSync({});
+    if (!OBJECTS) {
+        std::println("err: failed to query the tavern: {}", errorString(OBJECTS.error()));
+        return 1;
     }
 
-    manager->setReady([] {});
-    return true;
-}
+    if (OBJECTS->size() == 1)
+        std::println("There is {} object in the tavern:", OBJECTS->size());
+    else
+        std::println("There are {} objects in the tavern:", OBJECTS->size());
 
-static bool createNewSecurityObject(const std::string& token = "") {
-    security = makeShared<CCHpHyprtavernPermissionContextV1Object>(manager->sendCreatePermissionContext(token.c_str()));
-    security->sendSetDisplayIdentity("hyprtavern-spy", "Hyprtavern spy utility");
-    security->sendRequestPermission("core.monitoring.sensitive.all_bus_objects", HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_MODE_PERMANENT);
+    for (const auto& object : *OBJECTS) {
+        const auto PROVIDER = object.provider.id.empty() ? std::string{"unknown"} : std::format("{} (kind {})", object.provider.id, sc<int>(object.provider.kind));
 
-    security->setPersistenceToken([token](const char* tk) {
-        // an empty token means no saved context yet, it must not replace ours
-        if (!kvManager || !canSaveToken || !*tk || token == tk)
-            return;
+        std::println(" ┣╸{}#{}:", object.name, object.id);
+        std::println(" ┃   ┣╸provider: {}", PROVIDER);
+        std::println(" ┃   ┣╸protocols:");
 
-        kvManager->sendSetValue(KV_TOKEN_NAME, tk, HP_HYPRTAVERN_KV_STORE_V1_VALUE_TYPE_APP_VALUE);
-    });
-
-    std::optional<bool> permissionDone;
-    bool                unavailable = false;
-
-    security->setPermissionResult([&permissionDone](const char* perm, uint32_t result, uint32_t mode) {
-        permissionDone = result == HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_RESULT_GRANTED_BY_POLICY || result == HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_RESULT_GRANTED ||
-            result == HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_RESULT_ALREADY_GRANTED;
-    });
-
-    security->setUnavailable([&unavailable] { unavailable = true; });
-
-    const auto started = std::chrono::steady_clock::now();
-    while (!permissionDone.has_value() && !unavailable && std::chrono::steady_clock::now() - started < PERMISSION_TIMEOUT) {
-        if (!sock->dispatchEvents(false)) {
-            std::println("err: transport failed while waiting for permission result");
-            return false;
+        size_t i = 0;
+        for (const auto& [name, revision] : object.protocols) {
+            std::println(" ┃   ┃   {}╸{}@{}", ++i == object.protocols.size() ? "┗" : "┣", name, revision);
         }
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
+        std::println(" ┃   ┗╸props:");
 
-    if (!permissionDone.has_value() && !unavailable) {
-        std::println("err: timed out waiting for permission result");
-        return false;
-    }
-
-    security->setPermissionResult([](const char* perm, uint32_t result, uint32_t mode) {});
-    security->setUnavailable([] {});
-
-    if (unavailable)
-        std::println("warning: permissions unavailable, results may be incomplete");
-    else if (!*permissionDone)
-        std::println("warning: permission to monitor all objects was denied, results may be incomplete");
-
-    return true;
-}
-
-static bool setupSecurityObject() {
-    // first, try to find our token in kv
-    auto kvQuery = makeShared<CCHpHyprtavernBusQueryV1Object>(manager->sendGetQueryObject({kvImpl->protocol()->specName().c_str()}, HP_HYPRTAVERN_CORE_V1_BUS_QUERY_FILTER_MODE_ALL,
-                                                                                          {}, HP_HYPRTAVERN_CORE_V1_BUS_QUERY_FILTER_MODE_ALL));
-
-    uint32_t objectId = 0;
-    kvQuery->setResults([&objectId](const std::vector<uint32_t>& res) {
-        if (res.empty())
-            return;
-
-        objectId = res[0];
-    });
-
-    sock->roundtrip();
-
-    if (objectId == 0)
-        return createNewSecurityObject();
-
-    auto handle = makeShared<CCHpHyprtavernBusObjectHandleV1Object>(manager->sendGetObjectHandle(objectId));
-
-    // connect is only allowed after the snapshot is done
-    sock->roundtrip();
-
-    const auto KV_PROTOCOL = kvImpl->protocol()->specName();
-    handle->sendConnect({KV_PROTOCOL.c_str()});
-
-    int fd = -1;
-
-    handle->setSocket([&fd](int f) { fd = f; });
-
-    sock->roundtrip();
-
-    if (fd < 0)
-        return createNewSecurityObject();
-
-    kvSock = Hyprwire::IClientSocket::open(fd);
-
-    kvSock->addImplementation(kvImpl);
-
-    if (!kvSock->waitForHandshake())
-        return createNewSecurityObject();
-
-    kvManager = makeShared<CCHpHyprtavernKvStoreManagerV1Object>(kvSock->bindProtocol(kvImpl->protocol(), KV_PROTOCOL_VERSION));
-
-    std::string valueObtained;
-
-    kvManager->sendGetValue(KV_TOKEN_NAME, HP_HYPRTAVERN_KV_STORE_V1_VALUE_TYPE_APP_VALUE);
-    kvManager->setValueObtained([&valueObtained](const char* k, const char* v, uint32_t type) {
-        valueObtained = v;
-        canSaveToken  = true;
-    });
-    kvManager->setValueFailed([](const char* k, uint32_t type, uint32_t reason) { canSaveToken = reason == HP_HYPRTAVERN_KV_STORE_V1_VALUE_OBTAINING_ERROR_VALUE_MISSING; });
-
-    kvSock->roundtrip();
-
-    if (valueObtained.empty())
-        return createNewSecurityObject();
-
-    // create security object from this token
-    return createNewSecurityObject(valueObtained);
-}
-
-int main(int argc, char** argv, char** envp) {
-    const auto XDG_RUNTIME_DIR = getenv("XDG_RUNTIME_DIR");
-
-    if (!XDG_RUNTIME_DIR) {
-        std::println("err: no runtime dir");
-        return 1;
-    }
-
-    sock = Hyprwire::IClientSocket::open(XDG_RUNTIME_DIR + std::string{"/hyprtavern/ht.sock"});
-
-    if (!sock) {
-        std::println("err: tavern is not serving beer");
-        return 1;
-    }
-
-    sock->addImplementation(impl);
-
-    if (!sock->waitForHandshake()) {
-        std::println("err: handshake failed");
-        return 1;
-    }
-
-    const auto SPEC = sock->getSpec(impl->protocol()->specName());
-
-    if (!SPEC) {
-        std::println("err: protocol unsupported");
-        return 1;
-    }
-
-    manager = makeShared<CCHpHyprtavernCoreManagerV1Object>(sock->bindProtocol(impl->protocol(), PROTOCOL_VERSION));
-
-    if (!waitForReady()) {
-        std::println("err: failed waiting for tavern readiness");
-        return 1;
-    }
-
-    if (!setupSecurityObject())
-        return 1;
-
-    {
-        query = makeShared<CCHpHyprtavernBusQueryV1Object>(
-            manager->sendGetQueryObject({}, HP_HYPRTAVERN_CORE_V1_BUS_QUERY_FILTER_MODE_ALL, {}, HP_HYPRTAVERN_CORE_V1_BUS_QUERY_FILTER_MODE_ALL));
-    }
-
-    query->setResults([](const std::vector<uint32_t>& ids) {
-        if (ids.size() == 1)
-            std::println("There is {} object in the tavern:", ids.size());
-        else
-            std::println("There are {} objects in the tavern:", ids.size());
-
-        for (const auto& id : ids) {
-            auto                     handle = makeShared<CCHpHyprtavernBusObjectHandleV1Object>(manager->sendGetObjectHandle(id));
-
-            std::string              name, provider;
-            std::vector<std::string> protocols;
-            std::vector<uint32_t>    revs;
-            std::vector<std::string> props;
-
-            handle->setName([&name](const char* str) { name = str; });
-            handle->setProviderIdentity([&provider](const char* id, uint32_t kind, uint32_t stable) { provider = *id ? std::format("{} (kind {})", id, kind) : "unknown"; });
-            handle->setProperties([&props](const std::vector<const char*>& p) {
-                for (const auto& pp : p) {
-                    props.emplace_back(pp);
-                }
-            });
-            handle->setProtocols([&protocols, &revs](const std::vector<const char*>& pn, const std::vector<uint32_t>& pr) {
-                for (const auto& x : pn) {
-                    protocols.emplace_back(x);
-                }
-
-                for (const auto& x : pr) {
-                    revs.emplace_back(x);
-                }
-            });
-
-            sock->roundtrip();
-
-            std::println(" ┣╸{}#{}:", name, id);
-            std::println(" ┃   ┣╸provider: {}", provider);
-            std::println(" ┃   ┣╸protocols:");
-            for (size_t i = 0; i < protocols.size(); ++i) {
-                std::println(" ┃   ┃   {}╸{}@{}", i == protocols.size() - 1 ? "┗" : "┣", protocols.at(i), revs.at(i));
-            }
-            std::println(" ┃   ┗╸props:");
-            for (size_t i = 0; i < props.size(); ++i) {
-                std::println(" ┃       {}╸{}", i == props.size() - 1 ? "┗" : "┣", props.at(i));
-            }
+        i = 0;
+        for (const auto& [name, value] : object.properties) {
+            std::println(" ┃       {}╸{}={}", ++i == object.properties.size() ? "┗" : "┣", name, value);
         }
-
-        sock->roundtrip();
-    });
-
-    sock->roundtrip();
+    }
 
     return 0;
 }

@@ -1,6 +1,4 @@
 add_executable(hyprtavern-env src/main.cpp)
-target_link_libraries(hyprtavern-env PkgConfig::deps)
-
-hyprwire_protocol(hyprtavern-env hp_hyprtavern_core_v1 CLIENT)
+target_link_libraries(hyprtavern-env hyprtavern-client)
 
 install(TARGETS hyprtavern-env)
