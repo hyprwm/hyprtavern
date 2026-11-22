@@ -1,76 +1,65 @@
 #pragma once
 
-#include "../helpers/Memory.hpp"
+#include "../store/Store.hpp"
 
-#include "Kv.hpp"
+#include <common/EventLoop.hpp>
+#include <common/Memory.hpp>
+#include <shared/BarmaidServer.hpp>
 
 #include <hp_hyprtavern_core_v1-client.hpp>
-#include <hp_hyprtavern_kv_store_v1-server.hpp>
-#include <hp_hyprtavern_barmaid_v1-server.hpp>
 
 #include <hyprutils/os/FileDescriptor.hpp>
+#include <hyprwire/hyprwire.hpp>
 
-struct SPermData {
-    WP<Hyprwire::IServerClient>                client;
-    std::string                                tokenUsed;
-    std::vector<uint32_t>                      permissions;
-    std::optional<std::string>                 appIdentifier;
-    bool                                       appIdentifierPersistent = false;
-    SP<CCHpHyprtavernSecurityResponseV1Object> securityResponse;
-};
+#include <functional>
+#include <string>
+#include <string_view>
+#include <unordered_map>
+#include <vector>
 
-class CManagerObject {
-  public:
-    CManagerObject(SP<CHpHyprtavernKvStoreManagerV1Object> obj);
-    ~CManagerObject();
+// what a connection may access, from its attested principal
+struct SAccess {
+    // the tavern's internal authority, required for tavern-scoped values
+    bool tavern = false;
 
-    void sendOpen();
-
-  private:
-    SP<CHpHyprtavernKvStoreManagerV1Object> m_object;
-    SP<SPermData>                           m_perms;
+    // scope of the app's own values, empty without a stable attested identity
+    std::string appScope;
 };
 
 class CCore {
   public:
-    CCore()  = default;
-    ~CCore() = default;
+    CCore(UP<Kv::CStore>&& store);
+    ~CCore();
 
-    CCore(const CCore&) = delete;
-    CCore(CCore&)       = delete;
-    CCore(CCore&&)      = delete;
+    bool           init(int controlFd, int tavernFd);
+    bool           run();
 
-    bool                           init(int fd);
-    void                           run();
+    const SAccess* access(const SP<Hyprwire::IServerClient>& client) const;
 
-    void                           removeObject(CManagerObject*);
-    void                           sendKvOpen();
-
-    Hyprutils::OS::CFileDescriptor m_kvEvent, m_kvEventWrite;
+    UP<Kv::CStore> m_store;
 
   private:
-    void sendReady();
-    void drainFd(Hyprutils::OS::CFileDescriptor& fd);
+    struct SPendingConnection {
+        Hyprutils::OS::CFileDescriptor                fd;
+        SP<CCHpHyprtavernConnectionPrincipalV1Object> principal;
+        SAccess                                       access;
+        bool                                          done = false;
+    };
 
-    struct {
-        SP<Hyprwire::IClientSocket>           socket;
-        SP<CCHpHyprtavernCoreManagerV1Object> manager;
-        SP<CCHpHyprtavernBusObjectV1Object>   busObject;
-    } m_tavern;
+    bool                                                  connectToTavern(int fd);
+    void                                                  onNewFd(int fd, const char* token, const std::vector<const char*>& scope);
+    void                                                  addClient(int fd, SAccess access, std::function<bool(std::string_view)>&& filter, bool control);
 
-    struct {
-        SP<Hyprwire::IServerSocket>                          socket;
-        std::vector<SP<CManagerObject>>                      managers;
-        std::vector<SP<CHpHyprtavernBarmaidManagerV1Object>> barmaidManagers;
-        bool                                                 ready = false;
-    } m_object;
+    SP<Hyprwire::IServerSocket>                           m_server;
+    UP<CBarmaidServer>                                    m_barmaid;
 
-    CKvStore                   m_kv;
+    SP<Hyprwire::IClientSocket>                           m_tavern;
+    SP<CCHpHyprtavernCoreManagerV1Object>                 m_manager;
+    SP<CCHpHyprtavernBusObjectV1Object>                   m_busObject;
 
-    std::vector<SP<SPermData>> m_permDatas;
-    SP<SPermData>              permDataFor(SP<Hyprwire::IServerClient>);
-
-    friend class CManagerObject;
+    std::vector<UP<SPendingConnection>>                   m_pending;
+    std::unordered_map<Hyprwire::IServerClient*, SAccess> m_clients;
+    CEventLoop                                            m_loop;
 };
 
 inline UP<CCore> g_core;

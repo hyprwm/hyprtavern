@@ -79,6 +79,8 @@ hyprwire_protocol(hyprtavern_lib hp_hyprtavern_permission_authentication_v1 CLIE
 add_executable(hyprtavern src/main.cpp)
 target_link_libraries(hyprtavern hyprtavern_lib)
 
+add_subdirectory(barmaids)
+
 if(BUILD_TESTING)
   message(STATUS "building tests is enabled")
 
@@ -87,7 +89,7 @@ if(BUILD_TESTING)
   file(GLOB_RECURSE TESTFILES CONFIGURE_DEPENDS "tests/*.cpp")
   add_executable(hyprtavern_tests ${TESTFILES})
   target_include_directories(hyprtavern_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-  target_link_libraries(hyprtavern_tests PRIVATE hyprtavern_lib GTest::gtest_main)
+  target_link_libraries(hyprtavern_tests PRIVATE hyprtavern_lib hyprtavern_kv_store GTest::gtest_main)
   gtest_discover_tests(hyprtavern_tests)
 else()
   message(STATUS "building tests is disabled")

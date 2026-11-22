@@ -1,30 +1,25 @@
-#include <hyprwire/hyprwire.hpp>
-
 #include "core/Core.hpp"
-#include "helpers/Logger.hpp"
 
-#include <print>
+#include <common/Log.hpp>
 
 #include <hyprutils/cli/ArgumentParser.hpp>
+#include <hyprutils/misc/HyprAssert.hpp>
+
+#include <csignal>
+#include <print>
 
 using namespace Hyprutils::CLI;
 
-#define ASSERT(expr)                                                                                                                                                               \
-    if (!(expr)) {                                                                                                                                                                 \
-        g_logger->log(LOG_CRIT, "Failed assertion at line {} in {}: {} was false", __LINE__,                                                                                       \
-                      ([]() constexpr -> std::string { return std::string(__FILE__).substr(std::string(__FILE__).find("/src/") + 1); })(), #expr);                                 \
-        std::abort();                                                                                                                                                              \
-    }
-
-int main(int argc, const char** argv, const char** envp) {
+int main(int argc, const char** argv) {
     CArgumentParser parser({argv, sc<size_t>(argc)});
 
-    ASSERT(parser.registerIntOption("fd", "", "Pass a file descriptor for the wire connection."));
-    ASSERT(parser.registerBoolOption("verbose", "", "Enable more logging"));
-    ASSERT(parser.registerBoolOption("help", "h", "Show the help menu"));
+    HYPRUTILS_ASSERT(parser.registerIntOption("control-fd", "", "The private control channel to the tavern"));
+    HYPRUTILS_ASSERT(parser.registerIntOption("tavern-fd", "", "The connection to the tavern's bus"));
+    HYPRUTILS_ASSERT(parser.registerBoolOption("verbose", "", "Enable more logging"));
+    HYPRUTILS_ASSERT(parser.registerBoolOption("help", "h", "Show the help menu"));
 
-    if (const auto ret = parser.parse(); !ret) {
-        g_logger->log(LOG_ERR, "Failed parsing arguments: {}", ret.error());
+    if (const auto RET = parser.parse(); !RET) {
+        g_logger->log(LOG_ERR, "Failed parsing arguments: {}", RET.error());
         return 1;
     }
 
@@ -36,20 +31,35 @@ int main(int argc, const char** argv, const char** envp) {
     if (parser.getBool("verbose").value_or(false))
         g_logger->setLogLevel(LOG_TRACE);
 
-    const auto FD_ARG = parser.getInt("fd");
+    const auto CONTROL_FD = parser.getInt("control-fd");
+    const auto TAVERN_FD  = parser.getInt("tavern-fd");
 
-    if (!FD_ARG) {
-        g_logger->log(LOG_ERR, "cannot run without --fd");
+    if (!CONTROL_FD || !TAVERN_FD) {
+        g_logger->log(LOG_ERR, "hyprtavern-kv is started by hyprtavern, it needs --control-fd and --tavern-fd");
         return 1;
     }
 
-    g_core = makeUnique<CCore>();
-    if (!g_core->init(*FD_ARG)) {
-        g_logger->log(LOG_ERR, "failed starting kv");
+    const auto PATH = Kv::defaultPath();
+    if (!PATH) {
+        g_logger->log(LOG_ERR, "no location for the store: {}", PATH.error());
         return 1;
     }
 
-    g_core->run();
+    // never start over an unreadable store, that would lose its data
+    auto store = Kv::CStore::open(*PATH);
+    if (!store) {
+        g_logger->log(LOG_ERR, "failed to open the store: {}", store.error());
+        return 1;
+    }
 
-    return 0;
+    // a peer closing its socket must not kill the store
+    std::signal(SIGPIPE, SIG_IGN);
+
+    g_core = makeUnique<CCore>(std::move(*store));
+
+    const bool SUCCESS = g_core->init(*CONTROL_FD, *TAVERN_FD) && g_core->run();
+
+    g_core.reset();
+
+    return SUCCESS ? 0 : 1;
 }
