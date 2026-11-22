@@ -91,7 +91,11 @@ void CKvManagerResource::onGetValue(const char* key, uint32_t type) {
 }
 
 CKvProtocol::CKvProtocol(const SP<Hyprwire::IServerSocket>& socket) {
-    socket->addImplementation(makeShared<CHpHyprtavernKvStoreV1Impl>(KV_STORE_PROTOCOL_VERSION, [this](SP<Hyprwire::IObject> object) { bindManager(std::move(object)); }));
+    socket->addImplementation(implementation());
+}
+
+SP<CHpHyprtavernKvStoreV1Impl> CKvProtocol::implementation() {
+    return makeShared<CHpHyprtavernKvStoreV1Impl>(KV_STORE_PROTOCOL_VERSION, [this](SP<Hyprwire::IObject> object) { bindManager(std::move(object)); });
 }
 
 void CKvProtocol::bindManager(SP<Hyprwire::IObject> object) {

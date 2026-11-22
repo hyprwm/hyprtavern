@@ -7,9 +7,8 @@ file(GLOB_RECURSE KV_SRCFILES CONFIGURE_DEPENDS "src/*.cpp")
 list(REMOVE_ITEM KV_SRCFILES "${CMAKE_CURRENT_SOURCE_DIR}/src/store/Store.cpp")
 
 add_executable(hyprtavern-kv ${KV_SRCFILES})
-target_link_libraries(hyprtavern-kv hyprtavern_kv_store hyprtavern_barmaid)
+target_link_libraries(hyprtavern-kv hyprtavern_kv_store hyprtavern_barmaid hyprtavern-client)
 
-hyprwire_protocol(hyprtavern-kv hp_hyprtavern_core_v1 CLIENT)
 hyprwire_protocol(hyprtavern-kv hp_hyprtavern_kv_store_v1 SERVER)
 
 install(TARGETS hyprtavern-kv)

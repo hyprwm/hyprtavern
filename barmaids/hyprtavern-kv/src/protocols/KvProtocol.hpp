@@ -31,6 +31,9 @@ class CKvProtocol {
   public:
     CKvProtocol(const SP<Hyprwire::IServerSocket>& socket);
 
+    // for serving the store on another socket too
+    SP<CHpHyprtavernKvStoreV1Impl> implementation();
+
   private:
     void                                bindManager(SP<Hyprwire::IObject> object);
     void                                destroyResource(CKvManagerResource* resource);
