@@ -11,6 +11,8 @@
 #include <optional>
 #include <unordered_set>
 
+#include <unistd.h>
+
 using namespace Hyprtavern;
 using namespace Hyprutils::OS;
 
@@ -132,6 +134,7 @@ void CTavern::sweep() {
     // requests are only done once their callbacks returned, so none of these is running
     std::erase_if(m_finds, [](const auto& request) { return request->done; });
     std::erase_if(m_handles, [](const auto& handle) { return handle->done(); });
+    std::erase_if(m_redemptions, [](const auto& redemption) { return redemption->done(); });
 
     // not yet while starting up
     if (m_permissions)
@@ -299,6 +302,36 @@ std::expected<SP<Hyprwire::IClientSocket>, eError> CTavern::connectUntil(const S
     }
 
     return std::unexpected(error);
+}
+
+std::expected<SP<IBusObject>, eError> CTavern::createObject(const std::string& name, const std::vector<std::string>& requiredPermissions) {
+    // the tavern disconnects us over invalid permissions
+    if (!validString(name) || !validPermissions(requiredPermissions))
+        return std::unexpected(eError::INVALID_ARGUMENT);
+
+    auto server = Hyprwire::IServerSocket::open();
+    if (!server)
+        return std::unexpected(eError::UNKNOWN);
+
+    auto wire = makeShared<CCHpHyprtavernBusObjectV1Object>(m_manager->sendGetBusObject(name.c_str(), Wire::toCStrings(requiredPermissions)));
+
+    auto object    = makeShared<CBusObject>(m_self.lock(), std::move(wire), std::move(server));
+    object->m_self = object;
+
+    return object;
+}
+
+void CTavern::redeem(const std::string& token, CPrincipalRedemption::DoneFn&& done) {
+    m_redemptions.emplace_back(makeUnique<CPrincipalRedemption>(m_manager, token, std::move(done)));
+}
+
+void CTavern::retire(SP<CCHpHyprtavernBusObjectV1Object> object) {
+    object->setNewFd([](int fd, const char*, const std::vector<const char*>&) { close(fd); });
+    object->setExposeProtocolError([](uint32_t, const char*) {});
+    object->sendDestroy();
+
+    // dropping it would make those events reference an unknown object, which breaks the connection
+    m_retiredObjects.emplace_back(std::move(object));
 }
 
 void CTavern::updateEnvironment(const EnvironmentUpdate& environment, EnvironmentCallback&& done) {

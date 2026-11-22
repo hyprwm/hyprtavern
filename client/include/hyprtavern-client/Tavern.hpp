@@ -1,5 +1,6 @@
 #pragma once
 
+#include "BusObject.hpp"
 #include "Types.hpp"
 
 #include <hyprutils/memory/SharedPtr.hpp>
@@ -108,6 +109,13 @@ namespace Hyprtavern {
         // connects to the first matching object that exposes all the implementations' protocols
         virtual std::expected<Hyprutils::Memory::CSharedPointer<Hyprwire::IClientSocket>, eError> connectSync(const SQuery& query, const ClientImplementations& implementations,
                                                                                                               std::chrono::milliseconds timeout = DEFAULT_TIMEOUT) = 0;
+
+        /*
+            Create an object on the bus for others to discover and connect to. requiredPermissions are
+            needed to discover or connect to it at all, from the start.
+        */
+        virtual std::expected<Hyprutils::Memory::CSharedPointer<IBusObject>, eError> createObject(const std::string&              name,
+                                                                                                  const std::vector<std::string>& requiredPermissions = {}) = 0;
 
         /*
             Update the environment of the tavern and its barmaids, e.g. WAYLAND_DISPLAY. An empty value unsets
