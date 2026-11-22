@@ -2,6 +2,7 @@
 
 #include "Helpers.hpp"
 #include "ObjectHandle.hpp"
+#include "Permissions.hpp"
 
 #include <hyprtavern-client/Tavern.hpp>
 
@@ -19,15 +20,19 @@ namespace Hyprtavern {
         virtual ~CTavern() = default;
 
         // handshakes, binds the core protocol and waits until the tavern is ready
-        std::expected<void, eError>                        init(Clock::time_point deadline);
+        std::expected<void, eError>                     init(const STavernOptions& options, Clock::time_point deadline);
 
-        int                                                fd() override;
-        bool                                               dispatch() override;
+        int                                             fd() override;
+        bool                                            dispatch() override;
 
-        void                                               find(const SQuery& query, FindCallback&& done) override;
-        std::expected<std::vector<SObjectInfo>, eError>    findSync(const SQuery& query, std::chrono::milliseconds timeout) override;
+        void                                            requestPermissions(const std::vector<std::string>& permissions, ePermissionMode mode, PermissionCallback&& done) override;
+        std::expected<PermissionResults, eError>        requestPermissionsSync(const std::vector<std::string>& permissions, ePermissionMode mode,
+                                                                               std::chrono::milliseconds timeout) override;
 
-        void                                               connect(uint32_t objectID, const ClientImplementations& implementations, ConnectCallback&& done) override;
+        void                                            find(const SQuery& query, FindCallback&& done) override;
+        std::expected<std::vector<SObjectInfo>, eError> findSync(const SQuery& query, std::chrono::milliseconds timeout) override;
+
+        void                                            connect(uint32_t objectID, const ClientImplementations& implementations, ConnectCallback&& done) override;
         std::expected<SP<Hyprwire::IClientSocket>, eError> connectSync(uint32_t objectID, const ClientImplementations& implementations, std::chrono::milliseconds timeout) override;
         std::expected<SP<Hyprwire::IClientSocket>, eError> connectSync(const SQuery& query, const ClientImplementations& implementations,
                                                                        std::chrono::milliseconds timeout) override;
@@ -70,5 +75,6 @@ namespace Hyprtavern {
         std::vector<UP<SFind>>          m_finds;
         std::vector<UP<CObjectHandle>>  m_handles;
         std::deque<EnvironmentCallback> m_environmentResults;
+        UP<CPermissions>                m_permissions;
     };
 }

@@ -36,6 +36,18 @@ namespace Hyprtavern {
         ANY = 1,
     };
 
+    // values match security_permission_mode in hp_hyprtavern_core_v1
+    enum class ePermissionMode : uint8_t {
+        SESSION   = 0,
+        PERMANENT = 1,
+    };
+
+    enum class ePermissionResult : uint8_t {
+        GRANTED,
+        DENIED,
+        FAILED,
+    };
+
     /*
         A tavern-attested application identity. Kind and id together identify an application,
         a display name or a PID never do.
@@ -47,6 +59,9 @@ namespace Hyprtavern {
     };
 
     constexpr std::chrono::milliseconds DEFAULT_TIMEOUT = std::chrono::seconds(10);
+
+    // permission requests may wait for the user
+    constexpr std::chrono::milliseconds PROMPT_TIMEOUT = std::chrono::minutes(1);
 
     HYPRTAVERN_API std::string_view errorString(eError error);
 }

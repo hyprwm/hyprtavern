@@ -47,14 +47,19 @@ namespace {
 std::expected<SP<ITavern>, eError> ITavern::open(const STavernOptions& options, std::chrono::milliseconds timeout) {
     const auto DEADLINE = Clock::now() + timeout;
 
-    auto       socket = openSocket(options);
+    // an invalid display identity is a protocol error
+    if (options.appName.size() > MAX_DISPLAY_NAME_LENGTH || options.appDescription.size() > MAX_DISPLAY_DESCRIPTION_LENGTH || !validString(options.appName) ||
+        !validString(options.appDescription))
+        return std::unexpected(eError::INVALID_ARGUMENT);
+
+    auto socket = openSocket(options);
     if (!socket)
         return std::unexpected(eError::NO_TAVERN);
 
     auto tavern    = makeShared<CTavern>(std::move(socket));
     tavern->m_self = tavern;
 
-    if (const auto RET = tavern->init(DEADLINE); !RET)
+    if (const auto RET = tavern->init(options, DEADLINE); !RET)
         return std::unexpected(RET.error());
 
     return tavern;
@@ -64,7 +69,7 @@ CTavern::CTavern(SP<Hyprwire::IClientSocket> socket) : m_socket(std::move(socket
     ;
 }
 
-std::expected<void, eError> CTavern::init(Clock::time_point deadline) {
+std::expected<void, eError> CTavern::init(const STavernOptions& options, Clock::time_point deadline) {
     auto       implementation = makeShared<CCHpHyprtavernCoreV1Impl>(CORE_PROTOCOL_VERSION);
     const auto SPEC           = implementation->protocol();
     m_socket->addImplementation(std::move(implementation));
@@ -81,7 +86,16 @@ std::expected<void, eError> CTavern::init(Clock::time_point deadline) {
             bindManager(std::move(object));
     });
 
-    return waitUntil([this] { return m_ready; }, deadline);
+    if (const auto RET = waitUntil([this] { return m_ready; }, deadline); !RET)
+        return RET;
+
+    m_permissions = makeUnique<CPermissions>(m_manager, options);
+
+    // best effort, permissions work without persistence too
+    if (options.persistPermissions)
+        m_permissions->loadToken(*this, deadline);
+
+    return {};
 }
 
 void CTavern::bindManager(SP<Hyprwire::IObject> object) {
@@ -118,6 +132,10 @@ void CTavern::sweep() {
     // requests are only done once their callbacks returned, so none of these is running
     std::erase_if(m_finds, [](const auto& request) { return request->done; });
     std::erase_if(m_handles, [](const auto& handle) { return handle->done(); });
+
+    // not yet while starting up
+    if (m_permissions)
+        m_permissions->sweep();
 }
 
 std::expected<void, eError> CTavern::waitUntil(const std::function<bool()>& done, Clock::time_point deadline) {
@@ -135,6 +153,16 @@ std::expected<T, eError> CTavern::await(Clock::time_point deadline, const std::f
         return std::unexpected(RET.error());
 
     return std::move(**result);
+}
+
+void CTavern::requestPermissions(const std::vector<std::string>& permissions, ePermissionMode mode, PermissionCallback&& done) {
+    m_permissions->request(permissions, mode, std::move(done));
+}
+
+std::expected<PermissionResults, eError> CTavern::requestPermissionsSync(const std::vector<std::string>& permissions, ePermissionMode mode, std::chrono::milliseconds timeout) {
+    return await<PermissionResults>(Clock::now() + timeout, [&](std::function<void(std::expected<PermissionResults, eError>)>&& done) {
+        requestPermissions(permissions, mode, [done = std::move(done)](PermissionResults results) { done(std::move(results)); });
+    });
 }
 
 void CTavern::SFind::finish() {

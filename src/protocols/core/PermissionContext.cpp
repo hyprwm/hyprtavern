@@ -4,6 +4,7 @@
 #include "../../helpers/Token.hpp"
 #include "../../security/SavedContext.hpp"
 
+#include <common/Limits.hpp>
 #include <common/Log.hpp>
 #include <common/PermissionName.hpp>
 
@@ -13,10 +14,7 @@
 using namespace Security;
 
 namespace {
-    constexpr size_t MAX_DISPLAY_NAME_LENGTH        = 256;
-    constexpr size_t MAX_DISPLAY_DESCRIPTION_LENGTH = 2048;
-
-    std::string      contextKey(const std::string& token) {
+    std::string contextKey(const std::string& token) {
         return std::format("context:{}", token);
     }
 }
