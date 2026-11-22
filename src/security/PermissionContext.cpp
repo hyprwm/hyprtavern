@@ -75,6 +75,10 @@ std::vector<std::string> CPermissionContext::permanentGrants() const {
     return result;
 }
 
+size_t CPermissionContext::grantCount() const {
+    return m_grants.size();
+}
+
 bool CPermissionContext::beginRequest(const std::string& permission) {
     return m_pending.emplace(permission).second;
 }

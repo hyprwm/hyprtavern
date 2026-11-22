@@ -39,6 +39,7 @@ namespace Security {
 
         std::vector<std::string> grants() const;
         std::vector<std::string> permanentGrants() const;
+        size_t                   grantCount() const;
 
         // at most one request per permission may be pending.
         bool             beginRequest(const std::string& permission);

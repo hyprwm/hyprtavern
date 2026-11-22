@@ -3,6 +3,7 @@
 #include "BusObjectHandle.hpp"
 #include "BusQuery.hpp"
 #include "Manager.hpp"
+#include "PermissionContext.hpp"
 #include "../../core/ClientManager.hpp"
 
 #include <common/Log.hpp>
@@ -48,6 +49,10 @@ SP<CBusObjectResource> CCoreProtocol::busObject(uint32_t id) const {
     return IT == m_busObjects.end() ? nullptr : *IT;
 }
 
+bool CCoreProtocol::hasPermissionContext(uint64_t clientID) const {
+    return std::ranges::any_of(m_contexts, [clientID](const auto& context) { return context->clientID() == clientID; });
+}
+
 void CCoreProtocol::destroyResource(CCoreManagerResource* resource) {
     std::erase_if(m_managers, [resource](const auto& other) { return other.get() == resource; });
 }
@@ -62,4 +67,8 @@ void CCoreProtocol::destroyResource(CBusQueryResource* resource) {
 
 void CCoreProtocol::destroyResource(CBusObjectHandleResource* resource) {
     std::erase_if(m_handles, [resource](const auto& other) { return other.get() == resource; });
+}
+
+void CCoreProtocol::destroyResource(CPermissionContextResource* resource) {
+    std::erase_if(m_contexts, [resource](const auto& other) { return other.get() == resource; });
 }

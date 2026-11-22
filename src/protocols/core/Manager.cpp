@@ -4,6 +4,7 @@
 #include "BusObjectHandle.hpp"
 #include "BusQuery.hpp"
 #include "CoreProtocol.hpp"
+#include "PermissionContext.hpp"
 #include "../../Tavern.hpp"
 #include "../../bus/Registry.hpp"
 
@@ -14,6 +15,8 @@
 CCoreManagerResource::CCoreManagerResource(SP<CHpHyprtavernCoreManagerV1Object> resource, SP<Core::CClient> client) : m_resource(std::move(resource)), m_client(client) {
     m_resource->setDestroy([this] { PROTO::core->destroyResource(this); });
     m_resource->setOnDestroy([this] { PROTO::core->destroyResource(this); });
+
+    m_resource->setCreatePermissionContext([this](uint32_t seq, const char* token) { onCreatePermissionContext(seq, token); });
 
     m_resource->setGetBusObject([this](uint32_t seq, const char* name, const std::vector<const char*>& requirements) { onGetBusObject(seq, name, requirements); });
 
@@ -44,6 +47,25 @@ bool CCoreManagerResource::ensureReady() {
 
     m_resource->error(Arguments::MALFORMED, "request sent before ready");
     return false;
+}
+
+void CCoreManagerResource::onCreatePermissionContext(uint32_t seq, const char* token) {
+    if (!ensureReady())
+        return;
+
+    // even across multiple managers
+    if (PROTO::core->hasPermissionContext(m_client->id())) {
+        m_resource->error(Arguments::MALFORMED, "the client already has a permission context");
+        return;
+    }
+
+    auto object = PROTO::core->createObject<CHpHyprtavernPermissionContextV1Object>(m_resource->getObject(), seq);
+    if (!object)
+        return;
+
+    const auto CONTEXT = PROTO::core->m_contexts.emplace_back(makeShared<CPermissionContextResource>(std::move(object), m_client.lock()));
+    CONTEXT->m_self    = CONTEXT;
+    CONTEXT->begin(token);
 }
 
 void CCoreManagerResource::onGetBusObject(uint32_t seq, const char* name, const std::vector<const char*>& requirements) {
