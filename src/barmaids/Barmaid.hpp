@@ -1,8 +1,8 @@
 #pragma once
 
 #include "../bus/Registry.hpp"
-#include "../helpers/EventLoop.hpp"
 
+#include <common/EventLoop.hpp>
 #include <common/Memory.hpp>
 
 #include <hp_hyprtavern_barmaid_v1-client.hpp>

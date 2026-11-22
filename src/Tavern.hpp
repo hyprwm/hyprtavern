@@ -1,7 +1,6 @@
 #pragma once
 
-#include "helpers/EventLoop.hpp"
-
+#include <common/EventLoop.hpp>
 #include <common/Memory.hpp>
 
 #include <hyprutils/os/FileDescriptor.hpp>
