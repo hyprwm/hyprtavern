@@ -5,3 +5,4 @@ target_link_libraries(hyprtavern_barmaid PUBLIC hyprtavern_common)
 hyprwire_protocol(hyprtavern_barmaid hp_hyprtavern_barmaid_v1 SERVER)
 
 add_subdirectory(hyprtavern-kv)
+add_subdirectory(hyprtavern-perm-daemon)

@@ -1,82 +1,62 @@
 #pragma once
 
-#include "../helpers/Memory.hpp"
+#include <common/EventLoop.hpp>
+#include <common/Memory.hpp>
+#include <shared/BarmaidServer.hpp>
 
-#include <hp_hyprtavern_core_v1-client.hpp>
 #include <hp_hyprtavern_permission_authentication_v1-server.hpp>
-#include <hp_hyprtavern_barmaid_v1-server.hpp>
 
-#include <unordered_map>
+#include <hyprtoolkit/core/Backend.hpp>
+#include <hyprtoolkit/window/Window.hpp>
 
-struct SPermData {
-    WP<Hyprwire::IServerClient> client;
-    std::string                 tokenUsed;
-    std::string                 appIdentifier;
-    std::vector<uint32_t>       permissions;
-    bool                        appIdentifierPersistent = false;
-};
+#include <hyprutils/signal/Listener.hpp>
+#include <hyprwire/hyprwire.hpp>
 
-class CTransactionObject {
-  public:
-    CTransactionObject(SP<CHpHyprtavernPermissionAuthenticationTransactionV1Object>&& obj);
-    ~CTransactionObject() = default;
+#include <deque>
 
-  private:
-    SP<CHpHyprtavernPermissionAuthenticationTransactionV1Object> m_object;
-
-    std::string                                                  m_appName, m_appID;
-    bool                                                         m_inert = false;
-};
-
-class CManagerObject {
-  public:
-    CManagerObject(SP<CHpHyprtavernPermissionAuthenticationManagerV1Object>&& obj);
-    ~CManagerObject() = default;
-
-    void sendAvailability(bool x);
-
-  private:
-    SP<CHpHyprtavernPermissionAuthenticationManagerV1Object> m_object;
-
-    SP<SPermData>                                            m_perms;
-};
+class CTransactionResource;
 
 class CCore {
   public:
-    CCore()  = default;
-    ~CCore() = default;
+    CCore() = default;
+    ~CCore();
 
-    CCore(const CCore&) = delete;
-    CCore(CCore&)       = delete;
-    CCore(CCore&&)      = delete;
+    bool init(int controlFd);
+    bool run();
 
-    bool init(int fd);
-    void run();
+    // queues a frozen transaction for prompting
+    void enqueue(WP<CTransactionResource> transaction);
 
-    void removeObject(CManagerObject*);
-    void removeObject(CTransactionObject*);
-
-    void updateAvailability(bool x);
+    // dismisses the prompt of a destroyed transaction, if shown
+    void dismiss(CTransactionResource* transaction);
 
   private:
-    struct {
-        SP<Hyprwire::IClientSocket>           socket;
-        SP<CCHpHyprtavernCoreManagerV1Object> manager;
-        SP<CCHpHyprtavernBusObjectV1Object>   busObject;
-    } m_tavern;
+    void dispatch();
+    void probeAvailability();
 
-    struct {
-        SP<Hyprwire::IServerSocket>                          socket;
-        std::vector<SP<CManagerObject>>                      managers;
-        std::vector<SP<CTransactionObject>>                  transactions;
-        std::vector<SP<CHpHyprtavernBarmaidManagerV1Object>> barmaids;
-    } m_object;
+    // runs the toolkit for as long as prompts are queued
+    void                                   showPrompts();
+    void                                   showNext();
+    void                                   answer(hpHyprtavernPermissionAuthenticationV1ResponseType response);
+    void                                   closeWindow();
+    void                                   failPending();
+    SP<CTransactionResource>               nextTransaction();
 
-    std::unordered_map<Hyprwire::IServerClient*, SP<SPermData>> m_permDatas;
-    SP<SPermData>                                               permDataFor(const SP<Hyprwire::IServerClient>&);
-    void                                                        cleanupPermData();
+    SP<Hyprtoolkit::IBackend>              createBackend();
 
-    friend class CManagerObject;
+    SP<Hyprwire::IServerSocket>            m_server;
+    UP<CBarmaidServer>                     m_barmaid;
+    CEventLoop                             m_loop;
+    Hyprutils::Signal::CHyprSignalListener m_environmentListener;
+
+    std::deque<WP<CTransactionResource>>   m_queue;
+    CTransactionResource*                  m_current = nullptr;
+
+    SP<Hyprtoolkit::IBackend>              m_backend;
+    SP<Hyprtoolkit::IWindow>               m_window;
+    bool                                   m_showing      = false;
+    bool                                   m_probePending = false;
+    bool                                   m_exit         = false;
 };
 
 inline UP<CCore> g_core;

@@ -1,60 +1,49 @@
-#include <hyprwire/hyprwire.hpp>
-
 #include "core/Core.hpp"
-#include "helpers/Logger.hpp"
-#include "ui/GUI.hpp"
 
-#include <print>
+#include <common/Log.hpp>
 
 #include <hyprutils/cli/ArgumentParser.hpp>
+#include <hyprutils/misc/HyprAssert.hpp>
+
+#include <csignal>
+#include <print>
 
 using namespace Hyprutils::CLI;
 
-#define ASSERT(expr)                                                                                                                                                               \
-    if (!(expr)) {                                                                                                                                                                 \
-        g_logger->log(LOG_CRIT, "Failed assertion at line {} in {}: {} was false", __LINE__,                                                                                       \
-                      ([]() constexpr -> std::string { return std::string(__FILE__).substr(std::string(__FILE__).find("/src/") + 1); })(), #expr);                                 \
-        std::abort();                                                                                                                                                              \
-    }
-
-int main(int argc, const char** argv, const char** envp) {
+int main(int argc, const char** argv) {
     CArgumentParser parser({argv, sc<size_t>(argc)});
 
-    ASSERT(parser.registerIntOption("fd", "", "Pass a file descriptor for the wire connection."));
-    ASSERT(parser.registerBoolOption("verbose", "", "Enable more logging"));
-    ASSERT(parser.registerBoolOption("help", "h", "Show the help menu"));
+    HYPRUTILS_ASSERT(parser.registerIntOption("control-fd", "", "The private control channel to the tavern"));
+    HYPRUTILS_ASSERT(parser.registerBoolOption("verbose", "", "Enable more logging"));
+    HYPRUTILS_ASSERT(parser.registerBoolOption("help", "h", "Show the help menu"));
 
-    if (const auto ret = parser.parse(); !ret) {
-        g_logger->log(LOG_ERR, "Failed parsing arguments: {}", ret.error());
+    if (const auto RET = parser.parse(); !RET) {
+        g_logger->log(LOG_ERR, "Failed parsing arguments: {}", RET.error());
         return 1;
     }
 
     if (parser.getBool("help").value_or(false)) {
-        std::println("{}", parser.getDescription(std::format("hyprtavern-kv built as part of hyprtavern v{}", HYPRTAVERN_VERSION)));
+        std::println("{}", parser.getDescription(std::format("hyprtavern-perm-daemon built as part of hyprtavern v{}", HYPRTAVERN_VERSION)));
         return 0;
     }
 
     if (parser.getBool("verbose").value_or(false))
         g_logger->setLogLevel(LOG_TRACE);
 
-    const auto FD_ARG = parser.getInt("fd");
-
-    if (!FD_ARG) {
-        g_logger->log(LOG_ERR, "cannot run without --fd");
+    const auto CONTROL_FD = parser.getInt("control-fd");
+    if (!CONTROL_FD) {
+        g_logger->log(LOG_ERR, "hyprtavern-perm-daemon is started by hyprtavern, it needs --control-fd");
         return 1;
     }
 
-    // update env once to init gui backend
+    // a peer closing its socket must not kill the daemon
+    std::signal(SIGPIPE, SIG_IGN);
+
     g_core = makeUnique<CCore>();
 
-    GUI::updateEnv();
+    const bool SUCCESS = g_core->init(*CONTROL_FD) && g_core->run();
 
-    if (!g_core->init(*FD_ARG)) {
-        g_logger->log(LOG_ERR, "failed starting pd");
-        return 1;
-    }
+    g_core.reset();
 
-    g_core->run();
-
-    return 0;
+    return SUCCESS ? 0 : 1;
 }

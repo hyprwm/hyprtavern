@@ -1,11 +1,3 @@
-cmake_minimum_required(VERSION 3.19)
-
-file(GLOB_RECURSE PD_SRCFILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
-set(PD_PROTOCOLS_DIR "${CMAKE_CURRENT_BINARY_DIR}/protocols")
-file(MAKE_DIRECTORY "${PD_PROTOCOLS_DIR}")
-
-add_executable(hyprtavern-perm-daemon ${PD_SRCFILES})
-
 pkg_check_modules(
   pd_deps
   REQUIRED
@@ -16,48 +8,18 @@ pkg_check_modules(
   xkbcommon
 )
 
-function(hyprprotocolServer protoPath protoName external)
-  if(external)
-    set(path ${protoPath})
-  else()
-    set(path ${HYPRWIRE_PROTOCOLS_DIR}/${protoPath})
-  endif()
-  set(xml "${path}/${protoName}.xml")
-  add_custom_command(
-    OUTPUT "${PD_PROTOCOLS_DIR}/${protoName}-server.cpp"
-           "${PD_PROTOCOLS_DIR}/${protoName}-server.hpp"
-    COMMAND "${HYPRWIRE_SCANNER_EXECUTABLE}" "${xml}" "${PD_PROTOCOLS_DIR}"
-    DEPENDS "${xml}" "${HYPRWIRE_SCANNER_EXECUTABLE}"
-    VERBATIM)
-  target_sources(hyprtavern-perm-daemon PRIVATE
-    "${PD_PROTOCOLS_DIR}/${protoName}-server.cpp"
-    "${PD_PROTOCOLS_DIR}/${protoName}-server.hpp")
-endfunction()
+# everything that doesn't need a display, as a library so tests can link it
+set(PD_CORE_SRCFILES "${CMAKE_CURRENT_SOURCE_DIR}/src/core/Transaction.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/src/ui/Text.cpp")
+add_library(hyprtavern_pd_core STATIC ${PD_CORE_SRCFILES})
+target_include_directories(hyprtavern_pd_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(hyprtavern_pd_core PUBLIC hyprtavern_common)
 
-function(hyprprotocol protoPath protoName external)
-  if(external)
-    set(path ${protoPath})
-  else()
-    set(path ${HYPRWIRE_PROTOCOLS_DIR}/${protoPath})
-  endif()
-  set(xml "${path}/${protoName}.xml")
-  add_custom_command(
-    OUTPUT "${PD_PROTOCOLS_DIR}/${protoName}-client.cpp"
-           "${PD_PROTOCOLS_DIR}/${protoName}-client.hpp"
-    COMMAND "${HYPRWIRE_SCANNER_EXECUTABLE}" --client "${xml}" "${PD_PROTOCOLS_DIR}"
-    DEPENDS "${xml}" "${HYPRWIRE_SCANNER_EXECUTABLE}"
-    VERBATIM)
-  target_sources(hyprtavern-perm-daemon PRIVATE
-    "${PD_PROTOCOLS_DIR}/${protoName}-client.cpp"
-    "${PD_PROTOCOLS_DIR}/${protoName}-client.hpp")
-endfunction()
+file(GLOB_RECURSE PD_SRCFILES CONFIGURE_DEPENDS "src/*.cpp")
+list(REMOVE_ITEM PD_SRCFILES ${PD_CORE_SRCFILES})
 
-hyprprotocol(hyprtavern hp_hyprtavern_core_v1 false)
-hyprprotocolServer(hyprtavern hp_hyprtavern_permission_authentication_v1 false)
-hyprprotocolServer(hyprtavern hp_hyprtavern_barmaid_v1 false)
+add_executable(hyprtavern-perm-daemon ${PD_SRCFILES})
+target_link_libraries(hyprtavern-perm-daemon hyprtavern_pd_core hyprtavern_barmaid PkgConfig::pd_deps)
 
-target_include_directories(hyprtavern-perm-daemon PRIVATE "${PD_PROTOCOLS_DIR}" ${pd_deps_INCLUDE_DIRS})
-
-target_link_libraries(hyprtavern-perm-daemon PkgConfig::deps PkgConfig::pd_deps)
+hyprwire_protocol(hyprtavern-perm-daemon hp_hyprtavern_permission_authentication_v1 SERVER)
 
 install(TARGETS hyprtavern-perm-daemon)
