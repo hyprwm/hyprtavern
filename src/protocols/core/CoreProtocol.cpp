@@ -2,6 +2,7 @@
 #include "BusObject.hpp"
 #include "BusObjectHandle.hpp"
 #include "BusQuery.hpp"
+#include "ConnectionPrincipal.hpp"
 #include "Manager.hpp"
 #include "PermissionContext.hpp"
 #include "../../core/ClientManager.hpp"
@@ -71,4 +72,8 @@ void CCoreProtocol::destroyResource(CBusObjectHandleResource* resource) {
 
 void CCoreProtocol::destroyResource(CPermissionContextResource* resource) {
     std::erase_if(m_contexts, [resource](const auto& other) { return other.get() == resource; });
+}
+
+void CCoreProtocol::destroyResource(CConnectionPrincipalResource* resource) {
+    std::erase_if(m_principals, [resource](const auto& other) { return other.get() == resource; });
 }

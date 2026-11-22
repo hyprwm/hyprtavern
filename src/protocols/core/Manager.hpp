@@ -18,6 +18,7 @@ class CCoreManagerResource {
     bool ensureReady();
 
     void onCreatePermissionContext(uint32_t seq, const char* token);
+    void onRedeemPrincipalToken(uint32_t seq, const char* token);
     void onGetBusObject(uint32_t seq, const char* name, const std::vector<const char*>& requirements);
     void onGetQueryObject(uint32_t seq, const std::vector<const char*>& protocols, uint32_t protocolMode, const std::vector<const char*>& properties, uint32_t propertyMode);
     void onGetObjectHandle(uint32_t seq, uint32_t id);

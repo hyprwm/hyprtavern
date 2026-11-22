@@ -3,9 +3,11 @@
 #include "BusObject.hpp"
 #include "BusObjectHandle.hpp"
 #include "BusQuery.hpp"
+#include "ConnectionPrincipal.hpp"
 #include "CoreProtocol.hpp"
 #include "PermissionContext.hpp"
 #include "../../Tavern.hpp"
+#include "../../bus/PrincipalTokens.hpp"
 #include "../../bus/Registry.hpp"
 
 #include <common/Environment.hpp>
@@ -17,6 +19,8 @@ CCoreManagerResource::CCoreManagerResource(SP<CHpHyprtavernCoreManagerV1Object> 
     m_resource->setOnDestroy([this] { PROTO::core->destroyResource(this); });
 
     m_resource->setCreatePermissionContext([this](uint32_t seq, const char* token) { onCreatePermissionContext(seq, token); });
+
+    m_resource->setRedeemConnectionPrincipalToken([this](uint32_t seq, const char* token) { onRedeemPrincipalToken(seq, token); });
 
     m_resource->setGetBusObject([this](uint32_t seq, const char* name, const std::vector<const char*>& requirements) { onGetBusObject(seq, name, requirements); });
 
@@ -66,6 +70,19 @@ void CCoreManagerResource::onCreatePermissionContext(uint32_t seq, const char* t
     const auto CONTEXT = PROTO::core->m_contexts.emplace_back(makeShared<CPermissionContextResource>(std::move(object), m_client.lock()));
     CONTEXT->m_self    = CONTEXT;
     CONTEXT->begin(token);
+}
+
+void CCoreManagerResource::onRedeemPrincipalToken(uint32_t seq, const char* token) {
+    if (!ensureReady())
+        return;
+
+    auto principal = Bus::tokens->redeem(token, m_client->id());
+
+    auto object = PROTO::core->createObject<CHpHyprtavernConnectionPrincipalV1Object>(m_resource->getObject(), seq);
+    if (!object)
+        return;
+
+    PROTO::core->m_principals.emplace_back(makeShared<CConnectionPrincipalResource>(std::move(object), std::move(principal)));
 }
 
 void CCoreManagerResource::onGetBusObject(uint32_t seq, const char* name, const std::vector<const char*>& requirements) {
