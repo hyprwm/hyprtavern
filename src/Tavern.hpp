@@ -25,6 +25,9 @@ class CTavern {
     bool run();
     void exit(bool success);
 
+    // applies a validated and authorized environment update
+    void updateEnvironment(const std::vector<const char*>& names, const std::vector<const char*>& values);
+
   private:
     bool                           initRuntimeDir();
     bool                           initSignals();

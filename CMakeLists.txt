@@ -71,6 +71,8 @@ list(REMOVE_ITEM SRCFILES "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
 add_library(hyprtavern_lib STATIC ${SRCFILES})
 target_link_libraries(hyprtavern_lib PUBLIC hyprtavern_common glaze::glaze)
 
+hyprwire_protocol(hyprtavern_lib hp_hyprtavern_core_v1 SERVER)
+
 add_executable(hyprtavern src/main.cpp)
 target_link_libraries(hyprtavern hyprtavern_lib)
 

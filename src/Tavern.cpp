@@ -2,7 +2,9 @@
 #include "bus/PrincipalTokens.hpp"
 #include "bus/Registry.hpp"
 #include "core/ClientManager.hpp"
+#include "protocols/core/CoreProtocol.hpp"
 
+#include <common/Environment.hpp>
 #include <common/Log.hpp>
 
 #include <array>
@@ -46,16 +48,21 @@ CTavern::CTavern(const STavernOptions& options) {
     Bus::registry = makeUnique<Bus::CRegistry>();
     Bus::tokens   = makeUnique<Bus::CPrincipalTokens>();
     Core::clients = makeUnique<Core::CClientManager>(options.enforcePermissions);
+    PROTO::core   = makeUnique<CCoreProtocol>(m_socket);
 
     m_socket->setNewClientHandler([](SP<Hyprwire::IServerClient> client) { Core::clients->add(client); });
     m_loop.addFd(m_socket->extractLoopFD(), [this] { m_socket->dispatchEvents(false); });
 
     g_logger->log(LOG_DEBUG, "listening on {}", m_socketPath.string());
 
+    PROTO::core->setReady();
+
     m_good = true;
 }
 
 CTavern::~CTavern() {
+    PROTO::core.reset();
+
     // tears down all clients, which still need the managers
     m_socket.reset();
 
@@ -164,4 +171,10 @@ bool CTavern::run() {
 void CTavern::exit(bool success) {
     m_success = m_success && success;
     m_loop.exit();
+}
+
+void CTavern::updateEnvironment(const std::vector<const char*>& names, const std::vector<const char*>& values) {
+    g_logger->log(LOG_DEBUG, "updating {} environment variables", names.size());
+
+    Environment::applyUpdate(names, values);
 }
