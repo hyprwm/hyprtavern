@@ -22,9 +22,6 @@ build/
 .cache/
 .vscode/
 
-protocols/*.hpp
-protocols/*.cpp
-
 tools/hyprtavern-spy/protocols/*.cpp
 tools/hyprtavern-spy/protocols/*.hpp
 
