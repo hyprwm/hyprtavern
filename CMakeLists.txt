@@ -65,6 +65,9 @@ add_library(hyprtavern_common STATIC ${COMMON_SRCFILES})
 target_include_directories(hyprtavern_common PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(hyprtavern_common PUBLIC PkgConfig::deps)
 
+# linked into the shared client library
+set_target_properties(hyprtavern_common PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 # the tavern, as a library so tests can link it
 file(GLOB_RECURSE SRCFILES CONFIGURE_DEPENDS "src/*.cpp")
 list(REMOVE_ITEM SRCFILES "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
@@ -79,6 +82,7 @@ hyprwire_protocol(hyprtavern_lib hp_hyprtavern_permission_authentication_v1 CLIE
 add_executable(hyprtavern src/main.cpp)
 target_link_libraries(hyprtavern hyprtavern_lib)
 
+add_subdirectory(client)
 add_subdirectory(barmaids)
 add_subdirectory(tools/hyprtavern-spy)
 add_subdirectory(tools/hyprtavern-env)

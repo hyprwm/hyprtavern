@@ -1,0 +1,11 @@
+prefix=@PREFIX@
+includedir=@INCLUDE@
+libdir=@LIBDIR@
+
+Name: hyprtavern-client
+URL: https://github.com/hyprwm/hyprtavern
+Description: A client library for the hyprtavern session bus
+Version: @HYPRTAVERN_VERSION@
+Requires: hyprutils hyprwire
+Cflags: -I${includedir}
+Libs: -L${libdir} -lhyprtavern-client
