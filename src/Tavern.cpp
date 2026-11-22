@@ -1,4 +1,6 @@
 #include "Tavern.hpp"
+#include "barmaids/KvBarmaid.hpp"
+#include "barmaids/PermissionBarmaid.hpp"
 #include "bus/PrincipalTokens.hpp"
 #include "bus/Registry.hpp"
 #include "core/ClientManager.hpp"
@@ -21,7 +23,8 @@ using namespace Hyprutils::OS;
 namespace {
     constexpr const char*        SOCKET_FILE_NAME = "ht.sock";
     constexpr const char*        LOCK_FILE_NAME   = ".ht-lock";
-    constexpr std::array<int, 2> HANDLED_SIGNALS  = {SIGTERM, SIGINT};
+    constexpr std::array<int, 3> HANDLED_SIGNALS  = {SIGTERM, SIGINT, SIGCHLD};
+    constexpr auto               STARTUP_TIMEOUT  = std::chrono::seconds{30};
 
     volatile sig_atomic_t        g_signalFd = -1;
 
@@ -55,13 +58,19 @@ CTavern::CTavern(const STavernOptions& options) {
 
     g_logger->log(LOG_DEBUG, "listening on {}", m_socketPath.string());
 
-    PROTO::core->setReady();
+    if (!initBarmaids())
+        return;
 
     m_good = true;
 }
 
 CTavern::~CTavern() {
+    // dismisses pending prompts, which still needs the barmaids
     PROTO::core.reset();
+
+    m_barmaidListeners.clear();
+    Barmaids::kv.reset();
+    Barmaids::permissions.reset();
 
     // tears down all clients, which still need the managers
     m_socket.reset();
@@ -144,14 +153,50 @@ bool CTavern::initSignals() {
     return true;
 }
 
+bool CTavern::initBarmaids() {
+    Barmaids::kv          = makeUnique<Barmaids::CKvBarmaid>();
+    Barmaids::permissions = makeUnique<Barmaids::CPermissionBarmaid>();
+
+    for (Barmaids::CBarmaid* barmaid : {sc<Barmaids::CBarmaid*>(Barmaids::kv.get()), sc<Barmaids::CBarmaid*>(Barmaids::permissions.get())}) {
+        m_barmaidListeners.emplace_back(barmaid->m_events.ready.listen([this] { onBarmaidReady(); }));
+
+        // the tavern cannot work without its barmaids
+        m_barmaidListeners.emplace_back(barmaid->m_events.died.listen([this] { exit(false); }));
+
+        if (!barmaid->launch(m_socket, m_loop))
+            return false;
+    }
+
+    m_loop.setDeadline(std::chrono::steady_clock::now() + STARTUP_TIMEOUT, [this] {
+        g_logger->log(LOG_ERR, "barmaids did not become ready in time");
+        exit(false);
+    });
+
+    return true;
+}
+
+void CTavern::onBarmaidReady() {
+    if (!Barmaids::kv->ready() || !Barmaids::permissions->ready())
+        return;
+
+    g_logger->log(LOG_DEBUG, "all barmaids are ready, the tavern is open");
+
+    m_loop.clearDeadline();
+    PROTO::core->setReady();
+}
+
 void CTavern::onSignals() {
     uint8_t signal = 0;
 
     while (read(m_signalReadFd.get(), &signal, 1) == 1) {
-        if (signal == SIGTERM || signal == SIGINT) {
-            g_logger->log(LOG_DEBUG, "received signal {}, exiting", signal);
-            exit(true);
+        if (signal == SIGCHLD) {
+            Barmaids::kv->reap();
+            Barmaids::permissions->reap();
+            continue;
         }
+
+        g_logger->log(LOG_DEBUG, "received signal {}, exiting", signal);
+        exit(true);
     }
 }
 
@@ -177,4 +222,7 @@ void CTavern::updateEnvironment(const std::vector<const char*>& names, const std
     g_logger->log(LOG_DEBUG, "updating {} environment variables", names.size());
 
     Environment::applyUpdate(names, values);
+
+    Barmaids::kv->updateEnvironment(names, values);
+    Barmaids::permissions->updateEnvironment(names, values);
 }

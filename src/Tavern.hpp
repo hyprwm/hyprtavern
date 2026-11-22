@@ -5,9 +5,11 @@
 #include <common/Memory.hpp>
 
 #include <hyprutils/os/FileDescriptor.hpp>
+#include <hyprutils/signal/Listener.hpp>
 #include <hyprwire/hyprwire.hpp>
 
 #include <filesystem>
+#include <vector>
 
 struct STavernOptions {
     bool enforcePermissions = false;
@@ -29,19 +31,23 @@ class CTavern {
     void updateEnvironment(const std::vector<const char*>& names, const std::vector<const char*>& values);
 
   private:
-    bool                           initRuntimeDir();
-    bool                           initSignals();
-    void                           onSignals();
+    bool                                                initRuntimeDir();
+    bool                                                initSignals();
+    bool                                                initBarmaids();
+    void                                                onSignals();
+    void                                                onBarmaidReady();
 
-    bool                           m_good    = false;
-    bool                           m_success = true;
+    bool                                                m_good    = false;
+    bool                                                m_success = true;
 
-    std::filesystem::path          m_socketPath;
-    Hyprutils::OS::CFileDescriptor m_lockFd;
-    Hyprutils::OS::CFileDescriptor m_signalReadFd, m_signalWriteFd;
+    std::filesystem::path                               m_socketPath;
+    Hyprutils::OS::CFileDescriptor                      m_lockFd;
+    Hyprutils::OS::CFileDescriptor                      m_signalReadFd, m_signalWriteFd;
 
-    SP<Hyprwire::IServerSocket>    m_socket;
-    CEventLoop                     m_loop;
+    SP<Hyprwire::IServerSocket>                         m_socket;
+    CEventLoop                                          m_loop;
+
+    std::vector<Hyprutils::Signal::CHyprSignalListener> m_barmaidListeners;
 };
 
 inline UP<CTavern> g_tavern;
