@@ -24,7 +24,7 @@ Key advantages of hyprtavern over D-Bus:
 
 ## Security model
 
-Hyprtavern is a per-user session bus, not a boundary between unrestricted processes running as the same user. By default, a client that is positively identified as an unsandboxed, same-user host process bypasses ordinary permissions. Applications must still request permissions and handle denial because this policy is configurable.
+Hyprtavern is a per-user session bus, not a boundary between unrestricted processes running as the same user. By default, a client that is positively identified as an unsandboxed, same-user host process bypasses ordinary permissions. Applications must still request permissions and handle denial because this policy is configurable: `hyprtavern --enforce-permissions` enforces them for host processes too.
 
 Sandboxed clients do not receive that bypass. On Linux, Flatpak applications are identified from the original peer PID through `/proc/<pid>/root/.flatpak-info` and use their Flatpak application ID as their stable identity. Other confined or ambiguous clients are treated conservatively: permissions are enforced, and persistent app-scoped state is disabled when no stable identity is available. Flatpak detection is Linux-specific; BSD uses its platform process credentials and falls back to permission enforcement when identity cannot be established confidently.
 
@@ -34,7 +34,11 @@ The built-in KV store keeps app values under this attested identifier. Its direc
 
 ## Build dependencies
 
-The complete build currently uses CMake and pkg-config with Hyprwire, Hyprwire protocols, Hyprutils, UUID, Glaze, OpenSSL, Hyprtoolkit, Pixman, libdrm, xkbcommon, Cairo/Pango, and the graphics/backend dependencies pulled in by Hyprtoolkit. Generated protocol bindings are written to the build directory, so out-of-source and read-only-source builds are supported.
+The complete build currently uses CMake and pkg-config with Hyprwire, Hyprwire protocols, Hyprutils, Glaze, Hyprtoolkit, Pixman, libdrm, xkbcommon, Cairo/Pango, and the graphics/backend dependencies pulled in by Hyprtoolkit. Tests use GoogleTest and are built in Debug. Generated protocol bindings are written to the build directory, so out-of-source and read-only-source builds are supported.
+
+## Barmaids
+
+Barmaids are trusted helpers started by the tavern: `hyprtavern-kv` stores values, and `hyprtavern-perm-daemon` shows permission prompts. Each one gets a private control channel at startup, on which the tavern is the client. The tavern talks to its barmaids only over these channels, never through the bus. See their READMEs for details.
 
 ## Non-goals
 

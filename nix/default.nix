@@ -11,13 +11,11 @@
   pixman,
   aquamarine,
   hyprgraphics,
-  libuuid,
   libdrm,
   cairo,
   pango,
   libGL,
   libxkbcommon,
-  openssl,
   glaze,
   version ? "git",
   shortRev ? "",
@@ -37,10 +35,8 @@ stdenv.mkDerivation {
     gtest
     hyprwire
     hyprutils
-    libuuid
     libdrm
     pixman
-    openssl
     glaze
     cairo
     pango
