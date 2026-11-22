@@ -3,6 +3,7 @@
 #include "../security/Identity.hpp"
 
 #include <common/Memory.hpp>
+#include <common/PropertyName.hpp>
 
 #include <cstdint>
 #include <expected>
@@ -68,9 +69,6 @@ namespace Bus {
         std::vector<std::pair<std::string, std::string>> properties;
         eFilterMode                                      propertyMode = eFilterMode::ALL;
     };
-
-    // (group):(name), both nonempty and made of letters, numbers, _ or +
-    bool isValidPropertyName(std::string_view name);
 
     // splits a query property at its first '=', validating the name
     std::optional<std::pair<std::string, std::string>> parseQueryProperty(std::string_view property);
