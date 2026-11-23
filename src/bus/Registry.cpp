@@ -44,8 +44,8 @@ namespace {
 }
 
 const SProtocol* SObject::protocol(std::string_view name) const {
-    const auto IT = std::ranges::find(protocols, name, &SProtocol::name);
-    return IT == protocols.end() ? nullptr : &*IT;
+    const auto IT = protocols.find(name);
+    return IT == protocols.end() ? nullptr : &IT->second;
 }
 
 std::optional<std::pair<std::string, std::string>> Bus::parseQueryProperty(std::string_view property) {
@@ -76,7 +76,19 @@ std::expected<uint32_t, eRegistryError> CRegistry::add(uint64_t owner, Security:
 }
 
 void CRegistry::remove(uint32_t id) {
-    m_objects.erase(id);
+    const auto IT = m_objects.find(id);
+    if (IT == m_objects.end())
+        return;
+
+    for (const auto& [name, protocol] : IT->second.protocols) {
+        const auto PROVIDERS = m_providers.find(name);
+        PROVIDERS->second.erase(id);
+
+        if (PROVIDERS->second.empty())
+            m_providers.erase(PROVIDERS);
+    }
+
+    m_objects.erase(IT);
 }
 
 const SObject* CRegistry::get(uint32_t id) const {
@@ -92,26 +104,28 @@ std::expected<void, eRegistryError> CRegistry::exposeProtocol(uint32_t id, eProv
     if (const auto RET = checkInfrastructure(role, protocol); !RET)
         return RET;
 
-    for (const auto& [otherID, other] : m_objects) {
-        if (otherID == id)
-            continue;
+    if (const auto PROVIDERS = m_providers.find(protocol.name); PROVIDERS != m_providers.end()) {
+        for (const auto& [otherID, exclusive] : PROVIDERS->second) {
+            if (otherID == id)
+                continue;
 
-        const auto EXISTING = other.protocol(protocol.name);
-        if (EXISTING && (EXISTING->exclusive || protocol.exclusive))
-            return std::unexpected(eRegistryError::ALREADY_EXPOSED);
+            if (exclusive || protocol.exclusive)
+                return std::unexpected(eRegistryError::ALREADY_EXPOSED);
+
+            // an exclusive registration is always the only one, so the first other provider decides
+            break;
+        }
     }
 
-    auto& object = IT->second;
+    auto& protocols = IT->second.protocols;
 
-    if (const auto EXISTING = std::ranges::find(object.protocols, protocol.name, &SProtocol::name); EXISTING != object.protocols.end()) {
-        *EXISTING = std::move(protocol);
-        return {};
-    }
-
-    if (object.protocols.size() >= MAX_PROTOCOLS)
+    // replacing a registration does not take a slot
+    if (!protocols.contains(protocol.name) && protocols.size() >= MAX_PROTOCOLS)
         return std::unexpected(eRegistryError::LIMIT_REACHED);
 
-    object.protocols.emplace_back(std::move(protocol));
+    m_providers[protocol.name][id] = protocol.exclusive;
+    protocols.insert_or_assign(protocol.name, std::move(protocol));
+
     return {};
 }
 

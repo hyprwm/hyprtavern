@@ -77,7 +77,7 @@ TEST(Registry, ReplacesRegistrationsOnTheSameObject) {
     ASSERT_TRUE(registry.exposeProtocol(A, eProviderRole::NONE, {.name = "example_v1", .version = 3, .exclusive = true}));
 
     ASSERT_EQ(registry.get(A)->protocols.size(), 1);
-    EXPECT_EQ(registry.get(A)->protocols.front().version, 3);
+    EXPECT_EQ(registry.get(A)->protocols.at("example_v1").version, 3);
 
     // a failed replacement keeps the previous registration
     ASSERT_TRUE(registry.exposeProtocol(B, eProviderRole::NONE, protocol("shared_v1")));

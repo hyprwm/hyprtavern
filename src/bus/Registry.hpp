@@ -52,15 +52,15 @@ namespace Bus {
     };
 
     struct SObject {
-        uint32_t                           id    = 0;
-        uint64_t                           owner = 0;
-        Security::SAppIdentity             provider;
-        std::string                        name;
-        std::vector<std::string>           requirements;
-        std::vector<SProtocol>             protocols;
-        std::map<std::string, std::string> properties;
+        uint32_t                                      id    = 0;
+        uint64_t                                      owner = 0;
+        Security::SAppIdentity                        provider;
+        std::string                                   name;
+        std::vector<std::string>                      requirements;
+        std::map<std::string, SProtocol, std::less<>> protocols;
+        std::map<std::string, std::string>            properties;
 
-        const SProtocol*                   protocol(std::string_view name) const;
+        const SProtocol*                              protocol(std::string_view name) const;
     };
 
     struct SQuery {
@@ -94,6 +94,9 @@ namespace Bus {
       private:
         std::map<uint32_t, SObject> m_objects;
         uint32_t                    m_nextID = 1;
+
+        // the objects exposing each protocol, and whether they do so exclusively
+        std::map<std::string, std::map<uint32_t, bool>, std::less<>> m_providers;
     };
 
     inline UP<CRegistry> registry;

@@ -34,8 +34,8 @@ CBusObjectHandleResource::CBusObjectHandleResource(SP<CHpHyprtavernBusObjectHand
     std::vector<const char*> protocols;
     std::vector<uint32_t>    versions;
 
-    for (const auto& protocol : OBJECT->protocols) {
-        protocols.emplace_back(protocol.name.c_str());
+    for (const auto& [name, protocol] : OBJECT->protocols) {
+        protocols.emplace_back(name.c_str());
         versions.emplace_back(protocol.version);
     }
 
