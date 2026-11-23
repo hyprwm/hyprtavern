@@ -28,7 +28,8 @@ namespace {
         std::unordered_set<std::string_view> seen;
 
         for (const auto& grant : grants) {
-            if (!isPromptablePermission(grant) || !seen.emplace(grant).second)
+            // grants from a newer catalog are kept, unknown core permissions are never satisfied anyway
+            if (!isRequestablePermission(grant) || grant == PERMISSION_UNSANDBOXED || !seen.emplace(grant).second)
                 return false;
         }
 

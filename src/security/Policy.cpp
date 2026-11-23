@@ -15,6 +15,10 @@ ePolicy Security::policyFor(const SPrincipal& principal, bool enforcePermissions
 }
 
 eAuthorization Security::authorize(const SPrincipal& principal, ePolicy policy, std::string_view permission, bool explicitlyGranted) {
+    // never by grants, catch-alls or bypass
+    if (!isKnownPermission(permission))
+        return eAuthorization::DENIED;
+
     // derived permissions are never granted explicitly, nor by bypass
     if (permission == PERMISSION_TAVERNKEEP)
         return principal.authority == eAuthority::INTERNAL ? eAuthorization::POLICY : eAuthorization::DENIED;

@@ -33,6 +33,11 @@ TEST(Policy, DerivesHostStatusIndependentlyOfBypass) {
     EXPECT_EQ(authorize(INTERNAL, ePolicy::BYPASS_ORDINARY, PERMISSION_UNSANDBOXED, false), eAuthorization::DENIED);
 }
 
+TEST(Policy, NeverSatisfiesUnknownCorePermissions) {
+    EXPECT_EQ(authorize(HOST, ePolicy::BYPASS_ORDINARY, "core.settings.basic.future", true), eAuthorization::DENIED);
+    EXPECT_EQ(authorize(INTERNAL, ePolicy::BYPASS_ORDINARY, "core.settings.basic.future", false), eAuthorization::DENIED);
+}
+
 TEST(Policy, ReservesTavernkeepForInternalAuthority) {
     EXPECT_EQ(authorize(INTERNAL, ePolicy::BYPASS_ORDINARY, PERMISSION_TAVERNKEEP, false), eAuthorization::POLICY);
     EXPECT_EQ(authorize(HOST, ePolicy::BYPASS_ORDINARY, PERMISSION_TAVERNKEEP, true), eAuthorization::DENIED);

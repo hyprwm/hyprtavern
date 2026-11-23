@@ -8,7 +8,7 @@ A permission name is a lowercase ASCII string containing at least two dot-separa
 
 The segment `all` is reserved for the end of a name. A grant ending in `.all` grants every permission below its parent at any current or future depth. Matching is segment-aware: `example.settings.all` grants `example.settings.theme.dark`, but grants neither `example.setting.theme` nor `example.settings`.
 
-The `core` namespace is reserved by Hyprtavern. A `core.*` name not listed below MUST be rejected. Syntactically valid names outside `core` are vendor permissions and MUST be accepted.
+The `core` namespace is reserved by Hyprtavern. A well-formed `core.*` name not listed below is unknown: it MUST NOT be granted, requests for it MUST return `failed`, and requirements containing it are never satisfied, not even by catch-alls or ordinary bypass. Unknown core names MUST NOT be treated as protocol errors, so the catalog can grow without breaking older implementations. Syntactically valid names outside `core` are vendor permissions and MUST be accepted.
 
 ## Authorization
 

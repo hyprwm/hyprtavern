@@ -38,6 +38,10 @@ TEST(SavedContext, RejectsMalformedRecords) {
     EXPECT_FALSE(parseSavedContext("{\"version\":1,\"ownerKind\":0,\"ownerId\":\"\",\"displayName\":\"\",\"displayDescription\":\"\",\"grants\":[]}"));
 }
 
+TEST(SavedContext, KeepsGrantsFromNewerCatalogs) {
+    EXPECT_TRUE(parseSavedContext(withGrants({"core.settings.basic.future"})));
+}
+
 TEST(SavedContext, RejectsInvalidGrants) {
     EXPECT_FALSE(parseSavedContext(withGrants({"example"})));
     EXPECT_FALSE(parseSavedContext(withGrants({"example.a", "example.a"})));

@@ -41,11 +41,19 @@ TEST(PermissionName, EnforcesLengthLimits) {
     EXPECT_FALSE(isValidPermission(std::format("example.{}", std::string(248, 'a'))));
 }
 
-TEST(PermissionName, ReservesTheCoreNamespace) {
-    EXPECT_FALSE(isValidPermission("core.settings"));
-    EXPECT_FALSE(isValidPermission("core.settings.all"));
-    EXPECT_FALSE(isValidPermission("core.unobtainium.all"));
-    EXPECT_TRUE(isValidPermission("corex.settings"));
+TEST(PermissionName, KnowsOnlyCatalogedCorePermissions) {
+    // well-formed, so names from newer catalogs never break older taverns
+    EXPECT_TRUE(isValidPermission("core.settings"));
+    EXPECT_TRUE(isValidPermission("core.unobtainium.all"));
+
+    EXPECT_FALSE(isKnownPermission("core.settings"));
+    EXPECT_FALSE(isKnownPermission("core.settings.all"));
+    EXPECT_FALSE(isKnownPermission("core.unobtainium.all"));
+    EXPECT_TRUE(isKnownPermission("core.settings.basic.wallpaper"));
+    EXPECT_TRUE(isKnownPermission("corex.settings"));
+
+    EXPECT_TRUE(isRequestablePermission("core.settings.basic.future"));
+    EXPECT_FALSE(isPromptablePermission("core.settings.basic.future"));
 }
 
 TEST(PermissionName, ClassifiesRequestability) {

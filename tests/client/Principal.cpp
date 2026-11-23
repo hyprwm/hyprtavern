@@ -21,6 +21,7 @@ TEST(Principal, BypassesOnlyValidOrdinaryPermissions) {
 
     EXPECT_TRUE(PRINCIPAL.has("example.anything"));
     EXPECT_FALSE(PRINCIPAL.has("not a permission"));
+    EXPECT_FALSE(PRINCIPAL.has("core.settings.basic.future"));
     EXPECT_FALSE(PRINCIPAL.has(PERMISSION_TAVERNKEEP));
     EXPECT_FALSE(PRINCIPAL.has(PERMISSION_UNSANDBOXED));
 }

@@ -229,6 +229,12 @@ void CPermissionContextResource::onRequestPermission(const char* permission, uin
 }
 
 void CPermissionContextResource::process(const std::string& permission, bool permanent) {
+    // from a newer catalog, so it can't be granted here
+    if (!isKnownPermission(permission)) {
+        finish(permission, HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_RESULT_FAILED);
+        return;
+    }
+
     // derived from host status, never prompted for or stored
     if (permission == PERMISSION_UNSANDBOXED) {
         const bool HOST = m_client->authorize(permission) != eAuthorization::DENIED;

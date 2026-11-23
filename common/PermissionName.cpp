@@ -62,10 +62,11 @@ bool Security::isValidPermission(std::string_view name) {
             return false;
     }
 
-    if (SEGMENTS.front() == "core")
-        return std::ranges::contains(CORE_PERMISSIONS, name);
-
     return true;
+}
+
+bool Security::isKnownPermission(std::string_view name) {
+    return !name.starts_with("core.") || std::ranges::contains(CORE_PERMISSIONS, name);
 }
 
 bool Security::isRequestablePermission(std::string_view name) {
@@ -73,7 +74,7 @@ bool Security::isRequestablePermission(std::string_view name) {
 }
 
 bool Security::isPromptablePermission(std::string_view name) {
-    return isRequestablePermission(name) && name != PERMISSION_UNSANDBOXED;
+    return isRequestablePermission(name) && name != PERMISSION_UNSANDBOXED && isKnownPermission(name);
 }
 
 bool Security::permissionGrants(std::string_view held, std::string_view requested) {
