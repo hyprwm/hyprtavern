@@ -4,13 +4,21 @@
 
 #include <format>
 #include <print>
+#include <ranges>
 
 using namespace Hyprtavern;
 using namespace Hyprutils::Memory;
 
 constexpr const char* MONITORING_PERMISSION = "core.monitoring.sensitive.all_bus_objects";
 
-int                   main() {
+static std::string    requirements(const std::vector<std::string>& permissions) {
+    if (permissions.empty())
+        return "nothing";
+
+    return permissions | std::views::join_with(std::string_view{", "}) | std::ranges::to<std::string>();
+}
+
+int main() {
     const auto TAVERN = ITavern::open({.appName = "hyprtavern-spy", .appDescription = "Hyprtavern spy utility"});
     if (!TAVERN) {
         std::println("err: {}", errorString(TAVERN.error()));
@@ -40,11 +48,12 @@ int                   main() {
 
         std::println(" ┣╸{}#{}:", object.name, object.id);
         std::println(" ┃   ┣╸provider: {}", PROVIDER);
+        std::println(" ┃   ┣╸requires: {}", requirements(object.requiredPermissions));
         std::println(" ┃   ┣╸protocols:");
 
         size_t i = 0;
-        for (const auto& [name, revision] : object.protocols) {
-            std::println(" ┃   ┃   {}╸{}@{}", ++i == object.protocols.size() ? "┗" : "┣", name, revision);
+        for (const auto& [name, protocol] : object.protocols) {
+            std::println(" ┃   ┃   {}╸{}@{}, requires: {}", ++i == object.protocols.size() ? "┗" : "┣", name, protocol.version, requirements(protocol.requiredPermissions));
         }
 
         std::println(" ┃   ┗╸props:");

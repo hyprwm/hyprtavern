@@ -37,13 +37,24 @@ namespace Hyprtavern {
         eFilterMode                                      propertyMode = eFilterMode::ALL;
     };
 
+    struct SProtocolInfo {
+        uint32_t version = 0;
+
+        // needed to connect on it, in addition to the object's requirements
+        std::vector<std::string> requiredPermissions;
+    };
+
     // a snapshot of a bus object. Names and properties are provider-supplied, the provider identity is attested.
     struct SObjectInfo {
-        uint32_t                           id = 0;
-        std::string                        name;
-        std::map<std::string, uint32_t>    protocols;
-        std::map<std::string, std::string> properties;
-        SIdentity                          provider;
+        uint32_t    id = 0;
+        std::string name;
+
+        // needed to discover or connect to the object at all. Request them, and the protocols' own, before connecting.
+        std::vector<std::string>             requiredPermissions;
+
+        std::map<std::string, SProtocolInfo> protocols;
+        std::map<std::string, std::string>   properties;
+        SIdentity                            provider;
     };
 
     struct SPermissionResult {

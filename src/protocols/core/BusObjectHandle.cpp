@@ -31,12 +31,11 @@ CBusObjectHandleResource::CBusObjectHandleResource(SP<CHpHyprtavernBusObjectHand
         return;
     }
 
-    std::vector<const char*> protocols;
-    std::vector<uint32_t>    versions;
+    m_resource->sendName(OBJECT->name.c_str());
+    m_resource->sendRequiredPermissions(Wire::toCStrings(OBJECT->requirements));
 
     for (const auto& [name, protocol] : OBJECT->protocols) {
-        protocols.emplace_back(name.c_str());
-        versions.emplace_back(protocol.version);
+        m_resource->sendProtocol(name.c_str(), protocol.version, Wire::toCStrings(protocol.requirements));
     }
 
     std::vector<std::string> properties;
@@ -45,8 +44,6 @@ CBusObjectHandleResource::CBusObjectHandleResource(SP<CHpHyprtavernBusObjectHand
         properties.emplace_back(std::format("{}={}", name, value));
     }
 
-    m_resource->sendName(OBJECT->name.c_str());
-    m_resource->sendProtocols(protocols, versions);
     m_resource->sendProperties(Wire::toCStrings(properties));
     m_resource->sendProviderIdentity(OBJECT->provider.id.c_str(), sc<uint32_t>(OBJECT->provider.kind), OBJECT->provider.stable);
     m_resource->sendDone();

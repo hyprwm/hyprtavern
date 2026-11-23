@@ -24,10 +24,10 @@ CObjectHandle::CObjectHandle(const SP<CCHpHyprtavernCoreManagerV1Object>& manage
 
     m_handle->setName([this](const char* name) { m_info.name = name; });
 
-    m_handle->setProtocols([this](const std::vector<const char*>& names, const std::vector<uint32_t>& revisions) {
-        for (size_t i = 0; i < names.size() && i < revisions.size(); ++i) {
-            m_info.protocols[names[i]] = revisions[i];
-        }
+    m_handle->setRequiredPermissions([this](const std::vector<const char*>& permissions) { m_info.requiredPermissions = Wire::toStrings(permissions); });
+
+    m_handle->setProtocol([this](const char* name, uint32_t version, const std::vector<const char*>& permissions) {
+        m_info.protocols[name] = {.version = version, .requiredPermissions = Wire::toStrings(permissions)};
     });
 
     m_handle->setProperties([this](const std::vector<const char*>& properties) {
