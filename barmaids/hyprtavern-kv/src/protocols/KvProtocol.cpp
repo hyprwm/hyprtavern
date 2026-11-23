@@ -56,13 +56,26 @@ void CKvManagerResource::onSetValue(const char* key, const char* value, uint32_t
     if (!validateRequest(key, type))
         return;
 
+    const std::string VALUE = value;
+
+    if (VALUE.size() > Kv::MAX_VALUE_LENGTH) {
+        m_resource->error(HP_HYPRTAVERN_KV_STORE_V1_PROTOCOL_ERRORS_INVALID_ARGUMENT, "value is too large");
+        return;
+    }
+
     const auto SCOPE = scopeFor(type);
     if (!SCOPE) {
         m_resource->sendValueFailed(key, type, SCOPE.error());
         return;
     }
 
-    if (const auto RET = g_core->m_store->set(*SCOPE, key, value); !RET) {
+    // the store is shared, running out of room is not this client's fault
+    if (!g_core->m_store->fits(*SCOPE, key, VALUE)) {
+        m_resource->sendValueFailed(key, type, HP_HYPRTAVERN_KV_STORE_V1_VALUE_OBTAINING_ERROR_QUOTA_EXCEEDED);
+        return;
+    }
+
+    if (const auto RET = g_core->m_store->set(*SCOPE, key, VALUE); !RET) {
         g_logger->log(LOG_ERR, "failed to store {}: {}", key, RET.error());
         m_resource->sendValueFailed(key, type, HP_HYPRTAVERN_KV_STORE_V1_VALUE_OBTAINING_ERROR_UNKNOWN_ERROR);
         return;

@@ -178,7 +178,7 @@ void CTavern::find(const SQuery& query, FindCallback&& done) {
 
     for (const auto& [name, value] : query.properties) {
         // the tavern disconnects us over invalid properties
-        if (!Bus::isValidPropertyName(name) || !validString(value)) {
+        if (!Bus::isValidPropertyName(name) || !Bus::isValidPropertyValue(value) || !validString(value)) {
             done(std::unexpected(eError::INVALID_ARGUMENT));
             return;
         }
@@ -305,8 +305,8 @@ std::expected<SP<Hyprwire::IClientSocket>, eError> CTavern::connectUntil(const S
 }
 
 std::expected<SP<IBusObject>, eError> CTavern::createObject(const std::string& name, const std::vector<std::string>& requiredPermissions) {
-    // the tavern disconnects us over invalid permissions
-    if (!validString(name) || !validPermissions(requiredPermissions))
+    // the tavern disconnects us over invalid names or permissions
+    if (name.size() > MAX_OBJECT_NAME_LENGTH || !validString(name) || !validPermissions(requiredPermissions))
         return std::unexpected(eError::INVALID_ARGUMENT);
 
     auto server = Hyprwire::IServerSocket::open();

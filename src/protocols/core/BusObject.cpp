@@ -39,8 +39,8 @@ CBusObjectResource::CBusObjectResource(SP<CHpHyprtavernBusObjectV1Object> resour
     });
 
     m_resource->setExposeProperty([this](const char* name, const char* value) {
-        if (!Bus::isValidPropertyName(name)) {
-            m_resource->error(HP_HYPRTAVERN_CORE_V1_PROTOCOL_ERRORS_INVALID_PROPERTY, "invalid property name");
+        if (!Bus::isValidPropertyName(name) || !Bus::isValidPropertyValue(value)) {
+            m_resource->error(HP_HYPRTAVERN_CORE_V1_PROTOCOL_ERRORS_INVALID_PROPERTY, "invalid property");
             return;
         }
 

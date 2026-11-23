@@ -66,6 +66,7 @@ TEST(Registry, ValidatesRegistrations) {
 
     EXPECT_EQ(registry.exposeProtocol(ID, eProviderRole::NONE, protocol("")).error(), eRegistryError::INVALID_REGISTRATION);
     EXPECT_EQ(registry.exposeProtocol(ID, eProviderRole::NONE, {.name = "example_v1", .version = 0}).error(), eRegistryError::INVALID_REGISTRATION);
+    EXPECT_EQ(registry.exposeProtocol(ID, eProviderRole::NONE, protocol(std::string(MAX_PROTOCOL_NAME_LENGTH + 1, 'a'))).error(), eRegistryError::INVALID_REGISTRATION);
     EXPECT_TRUE(registry.exposeProtocol(ID, eProviderRole::NONE, protocol("example_v1")));
 }
 
@@ -143,7 +144,7 @@ TEST(Registry, BoundsProtocolsAndProperties) {
     EXPECT_TRUE(registry.exposeProperty(ID, "GLOBAL:overflow", "x"));
 }
 
-TEST(Registry, ValidatesPropertyNames) {
+TEST(Registry, ValidatesProperties) {
     EXPECT_TRUE(isValidPropertyName("GLOBAL:WAYLAND_DISPLAY"));
     EXPECT_TRUE(isValidPropertyName("my_proto+1:value"));
     EXPECT_FALSE(isValidPropertyName("GLOBAL"));
@@ -151,10 +152,15 @@ TEST(Registry, ValidatesPropertyNames) {
     EXPECT_FALSE(isValidPropertyName("group:"));
     EXPECT_FALSE(isValidPropertyName("a:b:c"));
     EXPECT_FALSE(isValidPropertyName("group:na-me"));
+    EXPECT_FALSE(isValidPropertyName("GLOBAL:" + std::string(MAX_PROPERTY_NAME_LENGTH, 'a')));
+
+    EXPECT_TRUE(isValidPropertyValue(std::string(MAX_PROPERTY_VALUE_LENGTH, 'a')));
+    EXPECT_FALSE(isValidPropertyValue(std::string(MAX_PROPERTY_VALUE_LENGTH + 1, 'a')));
 
     EXPECT_EQ(parseQueryProperty("GLOBAL:A=b=c"), (std::pair<std::string, std::string>{"GLOBAL:A", "b=c"}));
     EXPECT_EQ(parseQueryProperty("GLOBAL:A"), std::nullopt);
     EXPECT_EQ(parseQueryProperty("bad name=x"), std::nullopt);
+    EXPECT_EQ(parseQueryProperty("GLOBAL:A=" + std::string(MAX_PROPERTY_VALUE_LENGTH + 1, 'a')), std::nullopt);
 }
 
 TEST(Registry, QueriesByProtocolsAndProperties) {

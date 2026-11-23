@@ -83,7 +83,7 @@ std::expected<void, eExposeError> CBusObject::exposeSync(const SExposeOptions& o
 
 bool CBusObject::setProperty(const std::string& name, const std::string& value) {
     // the tavern disconnects us over invalid properties
-    if (!Bus::isValidPropertyName(name) || !validString(value))
+    if (!Bus::isValidPropertyName(name) || !Bus::isValidPropertyValue(value) || !validString(value))
         return false;
 
     m_object->sendExposeProperty(name.c_str(), value.c_str());

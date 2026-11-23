@@ -27,6 +27,9 @@ namespace Kv {
 
         std::optional<std::string>                    get(const std::string& scope, const std::string& key) const;
 
+        // whether there is room for a write. A full store only refuses new keys.
+        bool fits(const std::string& scope, const std::string& key, const std::string& value) const;
+
         // an empty value deletes the key. Failures leave the store unchanged.
         std::expected<void, std::string> set(const std::string& scope, const std::string& key, const std::string& value);
 

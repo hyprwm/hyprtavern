@@ -78,7 +78,7 @@ namespace Hyprtavern {
         virtual void                              expose(const SExposeOptions& options)     = 0;
         virtual std::expected<void, eExposeError> exposeSync(const SExposeOptions& options) = 0;
 
-        // an empty value removes a property. Returns false for invalid names or values.
+        // an empty value removes a property. Returns false for invalid or overlong names or values.
         virtual bool setProperty(const std::string& name, const std::string& value) = 0;
 
         // replaces the permissions needed to discover or connect to this object. Returns false for invalid names.

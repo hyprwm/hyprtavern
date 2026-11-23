@@ -132,6 +132,10 @@ std::optional<std::string> CStore::get(const std::string& scope, const std::stri
     return ENTRY->second;
 }
 
+bool CStore::fits(const std::string& scope, const std::string& key, const std::string& value) const {
+    return value.empty() || m_entries < MAX_ENTRIES || get(scope, key);
+}
+
 std::expected<void, std::string> CStore::set(const std::string& scope, const std::string& key, const std::string& value) {
     if (value.size() > MAX_VALUE_LENGTH)
         return std::unexpected("value is too large");
@@ -142,7 +146,7 @@ std::expected<void, std::string> CStore::set(const std::string& scope, const std
     if (value.empty() && !PREVIOUS)
         return {};
 
-    if (!PREVIOUS && m_entries >= MAX_ENTRIES)
+    if (!fits(scope, key, value))
         return std::unexpected("the store is full");
 
     if (value.empty())

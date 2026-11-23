@@ -50,7 +50,7 @@ const SProtocol* SObject::protocol(std::string_view name) const {
 
 std::optional<std::pair<std::string, std::string>> Bus::parseQueryProperty(std::string_view property) {
     const auto EQUALS = property.find('=');
-    if (EQUALS == std::string_view::npos || !isValidPropertyName(property.substr(0, EQUALS)))
+    if (EQUALS == std::string_view::npos || !isValidPropertyName(property.substr(0, EQUALS)) || !isValidPropertyValue(property.substr(EQUALS + 1)))
         return std::nullopt;
 
     return std::pair{std::string{property.substr(0, EQUALS)}, std::string{property.substr(EQUALS + 1)}};
@@ -105,7 +105,7 @@ const SObject* CRegistry::get(uint32_t id) const {
 
 std::expected<void, eRegistryError> CRegistry::exposeProtocol(uint32_t id, eProviderRole role, SProtocol protocol) {
     const auto IT = m_objects.find(id);
-    if (IT == m_objects.end() || protocol.name.empty() || protocol.version == 0)
+    if (IT == m_objects.end() || protocol.name.empty() || protocol.name.size() > MAX_PROTOCOL_NAME_LENGTH || protocol.version == 0)
         return std::unexpected(eRegistryError::INVALID_REGISTRATION);
 
     if (const auto RET = checkInfrastructure(role, protocol); !RET)

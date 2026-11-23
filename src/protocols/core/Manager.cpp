@@ -11,6 +11,7 @@
 #include "../../bus/Registry.hpp"
 
 #include <common/Environment.hpp>
+#include <common/Limits.hpp>
 #include <common/PermissionName.hpp>
 #include <common/Wire.hpp>
 
@@ -88,6 +89,11 @@ void CCoreManagerResource::onRedeemPrincipalToken(uint32_t seq, const char* toke
 void CCoreManagerResource::onGetBusObject(uint32_t seq, const char* name, const std::vector<const char*>& requirements) {
     if (!ensureReady())
         return;
+
+    if (std::string_view{name}.size() > MAX_OBJECT_NAME_LENGTH) {
+        m_resource->error(HP_HYPRTAVERN_CORE_V1_PROTOCOL_ERRORS_INVALID_ARGUMENT, "object name is too long");
+        return;
+    }
 
     auto permissions = Arguments::permissions(requirements);
     if (!permissions) {

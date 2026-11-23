@@ -1,4 +1,5 @@
 #include "PropertyName.hpp"
+#include "Limits.hpp"
 
 #include <algorithm>
 
@@ -13,8 +14,12 @@ namespace {
 
 bool Bus::isValidPropertyName(std::string_view name) {
     const auto COLON = name.find(':');
-    if (COLON == std::string_view::npos)
+    if (name.size() > MAX_PROPERTY_NAME_LENGTH || COLON == std::string_view::npos)
         return false;
 
     return isValidPropertyPart(name.substr(0, COLON)) && isValidPropertyPart(name.substr(COLON + 1));
+}
+
+bool Bus::isValidPropertyValue(std::string_view value) {
+    return value.size() <= MAX_PROPERTY_VALUE_LENGTH;
 }
