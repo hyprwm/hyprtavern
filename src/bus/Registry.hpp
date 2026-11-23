@@ -2,6 +2,7 @@
 
 #include "../security/Identity.hpp"
 
+#include <common/Limits.hpp>
 #include <common/Memory.hpp>
 #include <common/PropertyName.hpp>
 
@@ -16,7 +17,8 @@
 #include <vector>
 
 namespace Bus {
-    constexpr size_t           MAX_OBJECTS    = 9999;
+    // so query results always fit an array
+    constexpr size_t           MAX_OBJECTS    = MAX_ARRAY_ELEMENTS;
     constexpr size_t           MAX_PROTOCOLS  = 9999;
     constexpr size_t           MAX_PROPERTIES = 9999;
 

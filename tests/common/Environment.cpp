@@ -1,4 +1,5 @@
 #include <common/Environment.hpp>
+#include <common/Limits.hpp>
 
 #include <gtest/gtest.h>
 
@@ -18,7 +19,7 @@ TEST(Environment, RejectsOversizedArrays) {
     std::vector<std::string> storage;
     std::vector<const char*> names, values;
 
-    for (size_t i = 0; i < 10000; ++i) {
+    for (size_t i = 0; i <= MAX_ARRAY_ELEMENTS; ++i) {
         storage.emplace_back(std::format("VAR_{}", i));
     }
 
