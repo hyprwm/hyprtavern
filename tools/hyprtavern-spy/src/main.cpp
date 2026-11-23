@@ -19,7 +19,7 @@ static std::string    requirements(const std::vector<std::string>& permissions) 
 }
 
 int main() {
-    const auto TAVERN = ITavern::open({.appName = "hyprtavern-spy", .appDescription = "Hyprtavern spy utility"});
+    const auto TAVERN = ITavern::open({.appName = "hyprtavern-spy", .appDescription = "Hyprtavern spy utility", .appID = "org.hyprland.hyprtavern.spy"});
     if (!TAVERN) {
         std::println("err: {}", errorString(TAVERN.error()));
         return 1;
