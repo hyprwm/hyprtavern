@@ -1,17 +1,28 @@
 #include <hyprtavern-client/hyprtavern-client.hpp>
 
-#include <hyprutils/memory/Casts.hpp>
-
 #include <format>
 #include <print>
 #include <ranges>
+#include <string_view>
 
 using namespace Hyprtavern;
-using namespace Hyprutils::Memory;
 
 constexpr const char* MONITORING_PERMISSION = "core.monitoring.sensitive.all_bus_objects";
 
-static std::string    requirements(const std::vector<std::string>& permissions) {
+// names match application_identity_kind in hp_hyprtavern_core_v1
+static std::string_view kindName(eIdentityKind kind) {
+    switch (kind) {
+        case eIdentityKind::HOST_EXECUTABLE: return "host_executable";
+        case eIdentityKind::FLATPAK: return "flatpak";
+        case eIdentityKind::INTERNAL: return "internal";
+        case eIdentityKind::HOST_APPLICATION: return "host_application, self-declared";
+        case eIdentityKind::UNKNOWN: break;
+    }
+
+    return "unknown";
+}
+
+static std::string requirements(const std::vector<std::string>& permissions) {
     if (permissions.empty())
         return "nothing";
 
@@ -44,7 +55,7 @@ int main() {
         std::println("There are {} objects in the tavern:", OBJECTS->size());
 
     for (const auto& object : *OBJECTS) {
-        const auto PROVIDER = object.provider.id.empty() ? std::string{"unknown"} : std::format("{} (kind {})", object.provider.id, sc<int>(object.provider.kind));
+        const auto PROVIDER = object.provider.id.empty() ? std::string{"unknown"} : std::format("{} ({})", object.provider.id, kindName(object.provider.kind));
 
         std::println(" ┣╸{}#{}:", object.name, object.id);
         std::println(" ┃   ┣╸provider: {}", PROVIDER);
