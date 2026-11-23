@@ -8,6 +8,7 @@
 constexpr uint32_t PERMISSION_AUTHENTICATION_PROTOCOL_VERSION = 1;
 
 static_assert(sc<uint32_t>(Prompts::eIdentityKind::INTERNAL) == HP_HYPRTAVERN_PERMISSION_AUTHENTICATION_V1_APPLICATION_IDENTITY_KIND_INTERNAL);
+static_assert(sc<uint32_t>(Prompts::eTransactionError::INVALID_PERMISSION) == HP_HYPRTAVERN_PERMISSION_AUTHENTICATION_V1_PROTOCOL_ERRORS_INVALID_PERMISSION);
 
 CTransactionResource::CTransactionResource(SP<CHpHyprtavernPermissionAuthenticationTransactionV1Object> resource) : m_resource(std::move(resource)) {
     m_resource->setDestroy([this] { PROTO::permissions->destroyResource(this); });
@@ -15,17 +16,17 @@ CTransactionResource::CTransactionResource(SP<CHpHyprtavernPermissionAuthenticat
 
     m_resource->setSetRequestingAppDisplayName([this](const char* name) {
         if (const auto RET = m_state.setDisplayName(name); !RET)
-            m_resource->error(UINT32_MAX, RET.error());
+            fail(RET.error());
     });
 
     m_resource->setSetRequestingAppAttestedId([this](const char* id, hpHyprtavernPermissionAuthenticationV1ApplicationIdentityKind kind) {
         if (const auto RET = m_state.setAttestedID(id, kind); !RET)
-            m_resource->error(UINT32_MAX, RET.error());
+            fail(RET.error());
     });
 
     m_resource->setAskPermission([this](const char* permission, hpHyprtavernPermissionAuthenticationV1AskType type) {
         if (const auto RET = m_state.ask(permission, type); !RET) {
-            m_resource->error(UINT32_MAX, RET.error());
+            fail(RET.error());
             return;
         }
 
@@ -43,6 +44,10 @@ CTransactionResource::~CTransactionResource() {
 
 const Prompts::SRequest& CTransactionResource::request() const {
     return m_state.request();
+}
+
+void CTransactionResource::fail(const Prompts::STransactionError& error) {
+    m_resource->error(sc<uint32_t>(error.code), error.message);
 }
 
 void CTransactionResource::sendResult(hpHyprtavernPermissionAuthenticationV1ResponseType response) {

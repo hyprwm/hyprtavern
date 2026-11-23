@@ -45,7 +45,7 @@ bool CKvManagerResource::validateRequest(const char* key, uint32_t type) {
     }
 
     if (type > HP_HYPRTAVERN_KV_STORE_V1_VALUE_TYPE_TAVERN_VALUE) {
-        m_resource->error(UINT32_MAX, "invalid value type");
+        m_resource->error(HP_HYPRTAVERN_KV_STORE_V1_PROTOCOL_ERRORS_INVALID_ARGUMENT, "invalid value type");
         return false;
     }
 

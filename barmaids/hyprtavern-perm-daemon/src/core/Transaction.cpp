@@ -5,26 +5,32 @@
 
 using namespace Prompts;
 
-constexpr uint32_t               ASK_TYPE_PERSIST = 1;
+constexpr uint32_t ASK_TYPE_PERSIST = 1;
 
-std::expected<void, std::string> CTransactionState::setDisplayName(std::string name) {
+namespace {
+    std::unexpected<STransactionError> fail(eTransactionError code, std::string message) {
+        return std::unexpected(STransactionError{.code = code, .message = std::move(message)});
+    }
+}
+
+std::expected<void, STransactionError> CTransactionState::setDisplayName(std::string name) {
     if (m_asked)
-        return std::unexpected("the transaction is frozen");
+        return fail(eTransactionError::INVALID_STATE, "the transaction is frozen");
 
     m_request.displayName = std::move(name);
     return {};
 }
 
-std::expected<void, std::string> CTransactionState::setAttestedID(std::string id, uint32_t kind) {
+std::expected<void, STransactionError> CTransactionState::setAttestedID(std::string id, uint32_t kind) {
     if (m_asked)
-        return std::unexpected("the transaction is frozen");
+        return fail(eTransactionError::INVALID_STATE, "the transaction is frozen");
 
     if (kind > sc<uint32_t>(eIdentityKind::INTERNAL))
-        return std::unexpected("invalid identity kind");
+        return fail(eTransactionError::INVALID_ARGUMENT, "invalid identity kind");
 
     // unknown identities have no identifier, all others need one
     if ((kind == sc<uint32_t>(eIdentityKind::UNKNOWN)) != id.empty())
-        return std::unexpected("identity kind and identifier don't match");
+        return fail(eTransactionError::INVALID_ARGUMENT, "identity kind and identifier don't match");
 
     m_request.attestedID = std::move(id);
     m_request.kind       = sc<eIdentityKind>(kind);
@@ -32,18 +38,18 @@ std::expected<void, std::string> CTransactionState::setAttestedID(std::string id
     return {};
 }
 
-std::expected<void, std::string> CTransactionState::ask(std::string permission, uint32_t askType) {
+std::expected<void, STransactionError> CTransactionState::ask(std::string permission, uint32_t askType) {
     if (m_asked)
-        return std::unexpected("ask_permission may only be sent once");
+        return fail(eTransactionError::INVALID_STATE, "ask_permission may only be sent once");
 
     if (!m_hasIdentity)
-        return std::unexpected("the attested identity has to be set first");
+        return fail(eTransactionError::INVALID_STATE, "the attested identity has to be set first");
 
     if (askType > ASK_TYPE_PERSIST)
-        return std::unexpected("invalid ask type");
+        return fail(eTransactionError::INVALID_ARGUMENT, "invalid ask type");
 
     if (!Security::isPromptablePermission(permission))
-        return std::unexpected("the permission cannot be prompted for");
+        return fail(eTransactionError::INVALID_PERMISSION, "the permission cannot be prompted for");
 
     m_request.permission = std::move(permission);
     m_request.persist    = askType == ASK_TYPE_PERSIST;

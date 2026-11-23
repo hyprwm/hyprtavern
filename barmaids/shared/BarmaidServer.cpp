@@ -31,7 +31,7 @@ void CBarmaidServer::bindManager(SP<Hyprwire::IObject> object) {
     // allowed before ready, so the tavern can provide the startup display configuration
     MANAGER->setUpdateTavernEnvironment([this, raw = MANAGER.get()](const std::vector<const char*>& names, const std::vector<const char*>& values) {
         if (const auto RET = Environment::validateUpdate(names, values); !RET) {
-            raw->error(UINT32_MAX, RET.error());
+            raw->error(HP_HYPRTAVERN_BARMAID_V1_PROTOCOL_ERRORS_INVALID_ARGUMENT, RET.error());
             return;
         }
 

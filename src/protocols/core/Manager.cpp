@@ -49,7 +49,7 @@ bool CCoreManagerResource::ensureReady() {
     if (m_ready && m_client)
         return true;
 
-    m_resource->error(Arguments::MALFORMED, "request sent before ready");
+    m_resource->error(HP_HYPRTAVERN_CORE_V1_PROTOCOL_ERRORS_NOT_READY, "request sent before ready");
     return false;
 }
 
@@ -59,7 +59,7 @@ void CCoreManagerResource::onCreatePermissionContext(uint32_t seq, const char* t
 
     // even across multiple managers
     if (PROTO::core->hasPermissionContext(m_client->id())) {
-        m_resource->error(Arguments::MALFORMED, "the client already has a permission context");
+        m_resource->error(HP_HYPRTAVERN_CORE_V1_PROTOCOL_ERRORS_INVALID_STATE, "the client already has a permission context");
         return;
     }
 
@@ -91,14 +91,14 @@ void CCoreManagerResource::onGetBusObject(uint32_t seq, const char* name, const 
 
     auto permissions = Arguments::permissions(requirements);
     if (!permissions) {
-        m_resource->error(Arguments::MALFORMED, "invalid required permissions");
+        m_resource->error(permissions.error(), "invalid required permissions");
         return;
     }
 
     const auto CLIENT = m_client.lock();
     const auto ID     = Bus::registry->add(CLIENT->id(), CLIENT->principal().identity, name, std::move(*permissions));
     if (!ID) {
-        m_resource->error(Arguments::MALFORMED, "too many bus objects");
+        m_resource->error(HP_HYPRTAVERN_CORE_V1_PROTOCOL_ERRORS_LIMIT_EXCEEDED, "too many bus objects");
         return;
     }
 
@@ -118,7 +118,7 @@ void CCoreManagerResource::onGetQueryObject(uint32_t seq, const std::vector<cons
 
     if (protocolMode > HP_HYPRTAVERN_CORE_V1_BUS_QUERY_FILTER_MODE_ANY || propertyMode > HP_HYPRTAVERN_CORE_V1_BUS_QUERY_FILTER_MODE_ANY || !Arguments::validArray(protocols) ||
         !Arguments::validArray(properties)) {
-        m_resource->error(Arguments::MALFORMED, "invalid query");
+        m_resource->error(HP_HYPRTAVERN_CORE_V1_PROTOCOL_ERRORS_INVALID_ARGUMENT, "invalid query");
         return;
     }
 
@@ -131,7 +131,7 @@ void CCoreManagerResource::onGetQueryObject(uint32_t seq, const std::vector<cons
     for (const auto& property : properties) {
         auto parsed = Bus::parseQueryProperty(property);
         if (!parsed) {
-            m_resource->error(HP_HYPRTAVERN_CORE_V1_BUS_MANAGER_ERRORS_INVALID_PROPERTY, "invalid property in query");
+            m_resource->error(HP_HYPRTAVERN_CORE_V1_PROTOCOL_ERRORS_INVALID_PROPERTY, "invalid property in query");
             return;
         }
 
@@ -164,7 +164,7 @@ void CCoreManagerResource::onUpdateEnvironment(const std::vector<const char*>& n
         return;
 
     if (const auto RET = Environment::validateUpdate(names, values); !RET) {
-        m_resource->error(Arguments::MALFORMED, RET.error());
+        m_resource->error(HP_HYPRTAVERN_CORE_V1_PROTOCOL_ERRORS_INVALID_ARGUMENT, RET.error());
         return;
     }
 

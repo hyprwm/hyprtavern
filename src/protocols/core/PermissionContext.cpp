@@ -176,7 +176,7 @@ void CPermissionContextResource::onSetDisplayIdentity(const char* name, const ch
     const SDisplayIdentity DISPLAY = {.name = name, .description = description};
 
     if (DISPLAY.name.size() > MAX_DISPLAY_NAME_LENGTH || DISPLAY.description.size() > MAX_DISPLAY_DESCRIPTION_LENGTH) {
-        m_resource->error(Arguments::MALFORMED, "display identity is too long");
+        m_resource->error(HP_HYPRTAVERN_CORE_V1_PROTOCOL_ERRORS_INVALID_ARGUMENT, "display identity is too long");
         return;
     }
 
@@ -190,8 +190,13 @@ void CPermissionContextResource::onSetDisplayIdentity(const char* name, const ch
 }
 
 void CPermissionContextResource::onRequestPermission(const char* permission, uint32_t mode) {
-    if (mode > HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_MODE_PERMANENT || !isRequestablePermission(permission)) {
-        m_resource->error(Arguments::MALFORMED, "invalid permission request");
+    if (mode > HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_MODE_PERMANENT) {
+        m_resource->error(HP_HYPRTAVERN_CORE_V1_PROTOCOL_ERRORS_INVALID_ARGUMENT, "invalid permission mode");
+        return;
+    }
+
+    if (!isRequestablePermission(permission)) {
+        m_resource->error(HP_HYPRTAVERN_CORE_V1_PROTOCOL_ERRORS_INVALID_PERMISSION, "invalid permission request");
         return;
     }
 
@@ -202,7 +207,7 @@ void CPermissionContextResource::onRequestPermission(const char* permission, uin
     const std::string PERMISSION = permission;
 
     if (!m_context->beginRequest(PERMISSION)) {
-        m_resource->error(Arguments::MALFORMED, std::format("a request for {} is already pending", PERMISSION));
+        m_resource->error(HP_HYPRTAVERN_CORE_V1_PROTOCOL_ERRORS_INVALID_STATE, std::format("a request for {} is already pending", PERMISSION));
         return;
     }
 

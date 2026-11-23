@@ -22,7 +22,7 @@ CBusObjectResource::CBusObjectResource(SP<CHpHyprtavernBusObjectV1Object> resour
     m_resource->setExposeProtocol([this](const char* name, uint32_t version, const std::vector<const char*>& requirements, uint32_t exclusive) {
         auto permissions = Arguments::permissions(requirements);
         if (!permissions) {
-            m_resource->error(Arguments::MALFORMED, "invalid required permissions");
+            m_resource->error(permissions.error(), "invalid required permissions");
             return;
         }
 
@@ -31,7 +31,7 @@ CBusObjectResource::CBusObjectResource(SP<CHpHyprtavernBusObjectV1Object> resour
             return;
 
         if (RET.error() == Bus::eRegistryError::LIMIT_REACHED) {
-            m_resource->error(Arguments::MALFORMED, "too many protocols");
+            m_resource->error(HP_HYPRTAVERN_CORE_V1_PROTOCOL_ERRORS_LIMIT_EXCEEDED, "too many protocols");
             return;
         }
 
@@ -40,18 +40,18 @@ CBusObjectResource::CBusObjectResource(SP<CHpHyprtavernBusObjectV1Object> resour
 
     m_resource->setExposeProperty([this](const char* name, const char* value) {
         if (!Bus::isValidPropertyName(name)) {
-            m_resource->error(HP_HYPRTAVERN_CORE_V1_BUS_OBJECT_ERRORS_INVALID_PROPERTY_NAME, "invalid property name");
+            m_resource->error(HP_HYPRTAVERN_CORE_V1_PROTOCOL_ERRORS_INVALID_PROPERTY, "invalid property name");
             return;
         }
 
         if (!Bus::registry->exposeProperty(m_id, name, value))
-            m_resource->error(Arguments::MALFORMED, "too many properties");
+            m_resource->error(HP_HYPRTAVERN_CORE_V1_PROTOCOL_ERRORS_LIMIT_EXCEEDED, "too many properties");
     });
 
     m_resource->setRequirePermissions([this](const std::vector<const char*>& requirements) {
         auto permissions = Arguments::permissions(requirements);
         if (!permissions) {
-            m_resource->error(Arguments::MALFORMED, "invalid required permissions");
+            m_resource->error(permissions.error(), "invalid required permissions");
             return;
         }
 

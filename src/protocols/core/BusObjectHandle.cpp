@@ -60,7 +60,7 @@ CBusObjectHandleResource::~CBusObjectHandleResource() {
 
 void CBusObjectHandleResource::onConnect(const std::vector<const char*>& protocols) {
     if (m_state != eState::READY) {
-        m_resource->error(Arguments::MALFORMED, "connect is only allowed once, after done");
+        m_resource->error(HP_HYPRTAVERN_CORE_V1_PROTOCOL_ERRORS_INVALID_STATE, "connect is only allowed once, after done");
         return;
     }
 
@@ -68,7 +68,7 @@ void CBusObjectHandleResource::onConnect(const std::vector<const char*>& protoco
     std::unordered_set<std::string_view> unique{REQUESTED.begin(), REQUESTED.end()};
 
     if (REQUESTED.empty() || !Arguments::validArray(protocols) || unique.size() != REQUESTED.size()) {
-        m_resource->error(Arguments::MALFORMED, "connect requires a nonempty list of distinct protocols");
+        m_resource->error(HP_HYPRTAVERN_CORE_V1_PROTOCOL_ERRORS_INVALID_ARGUMENT, "connect requires a nonempty list of distinct protocols");
         return;
     }
 

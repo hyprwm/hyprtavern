@@ -27,7 +27,7 @@ CConnectionPrincipalResource::~CConnectionPrincipalResource() {
 
 void CConnectionPrincipalResource::onRequery() {
     if (!m_principal) {
-        m_resource->error(Arguments::MALFORMED, "requery on an inert principal");
+        m_resource->error(HP_HYPRTAVERN_CORE_V1_PROTOCOL_ERRORS_INVALID_STATE, "requery on an inert principal");
         return;
     }
 

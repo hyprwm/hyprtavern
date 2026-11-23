@@ -21,6 +21,8 @@ class CTransactionResource {
     WP<CTransactionResource> m_self;
 
   private:
+    void                                                         fail(const Prompts::STransactionError& error);
+
     SP<CHpHyprtavernPermissionAuthenticationTransactionV1Object> m_resource;
     Prompts::CTransactionState                                   m_state;
     bool                                                         m_done = false;

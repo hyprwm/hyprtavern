@@ -13,6 +13,18 @@ namespace Prompts {
         INTERNAL        = 3,
     };
 
+    // values match protocol_errors in hp_hyprtavern_permission_authentication_v1
+    enum class eTransactionError : uint32_t {
+        INVALID_ARGUMENT   = 0,
+        INVALID_STATE      = 1,
+        INVALID_PERMISSION = 2,
+    };
+
+    struct STransactionError {
+        eTransactionError code = eTransactionError::INVALID_ARGUMENT;
+        std::string       message;
+    };
+
     // a frozen permission request
     struct SRequest {
         std::string   displayName;
@@ -25,14 +37,14 @@ namespace Prompts {
     // validates a transaction's requests in protocol order. Errors are protocol errors.
     class CTransactionState {
       public:
-        std::expected<void, std::string> setDisplayName(std::string name);
-        std::expected<void, std::string> setAttestedID(std::string id, uint32_t kind);
+        std::expected<void, STransactionError> setDisplayName(std::string name);
+        std::expected<void, STransactionError> setAttestedID(std::string id, uint32_t kind);
 
         // freezes the request
-        std::expected<void, std::string> ask(std::string permission, uint32_t askType);
+        std::expected<void, STransactionError> ask(std::string permission, uint32_t askType);
 
-        bool                             asked() const;
-        const SRequest&                  request() const;
+        bool                                   asked() const;
+        const SRequest&                        request() const;
 
       private:
         SRequest m_request;
