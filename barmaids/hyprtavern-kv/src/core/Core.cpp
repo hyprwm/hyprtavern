@@ -98,7 +98,7 @@ std::optional<SAccess> CCore::access(const SP<Hyprwire::IServerClient>& client) 
 }
 
 bool CCore::connectToTavern(int fd) {
-    auto tavern = Hyprtavern::ITavern::open({.persistPermissions = false, .fd = fd});
+    auto tavern = Hyprtavern::ITavern::open({.fd = fd});
     if (!tavern) {
         g_logger->log(LOG_ERR, "failed to connect to the tavern: {}", Hyprtavern::errorString(tavern.error()));
         return false;

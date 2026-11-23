@@ -26,9 +26,6 @@ namespace Hyprtavern {
         */
         std::string appID;
 
-        // keep the permission context's token in the app's kv values, so permanent grants are restored on the next run
-        bool persistPermissions = true;
-
         // an already connected tavern socket, of which the tavern takes ownership. Defaults to $XDG_RUNTIME_DIR/hyprtavern/ht.sock
         std::optional<int> fd;
     };

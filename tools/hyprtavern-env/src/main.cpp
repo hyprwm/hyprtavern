@@ -92,7 +92,7 @@ int main(int argc, const char** argv, char** envp) {
         }
     }
 
-    const auto TAVERN = ITavern::open({.persistPermissions = false});
+    const auto TAVERN = ITavern::open();
     if (!TAVERN) {
         std::println("err: {}", errorString(TAVERN.error()));
         return 1;

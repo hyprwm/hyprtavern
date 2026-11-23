@@ -22,7 +22,7 @@ CCoreManagerResource::CCoreManagerResource(SP<CHpHyprtavernCoreManagerV1Object> 
 
     m_resource->setDeclareHostApplication([this](const char* appID) { onDeclareHostApplication(appID); });
 
-    m_resource->setCreatePermissionContext([this](uint32_t seq, const char* token) { onCreatePermissionContext(seq, token); });
+    m_resource->setCreatePermissionContext([this](uint32_t seq) { onCreatePermissionContext(seq); });
 
     m_resource->setRedeemConnectionPrincipalToken([this](uint32_t seq, const char* token) { onRedeemPrincipalToken(seq, token); });
 
@@ -76,7 +76,7 @@ void CCoreManagerResource::onDeclareHostApplication(const char* appID) {
         m_resource->error(HP_HYPRTAVERN_CORE_V1_PROTOCOL_ERRORS_INVALID_STATE, "app ids must be declared once, before any other request");
 }
 
-void CCoreManagerResource::onCreatePermissionContext(uint32_t seq, const char* token) {
+void CCoreManagerResource::onCreatePermissionContext(uint32_t seq) {
     if (!ensureReady())
         return;
 
@@ -92,7 +92,7 @@ void CCoreManagerResource::onCreatePermissionContext(uint32_t seq, const char* t
 
     const auto CONTEXT = PROTO::core->m_contexts.emplace(m_client->id(), makeShared<CPermissionContextResource>(std::move(object), m_client.lock())).first->second;
     CONTEXT->m_self    = CONTEXT;
-    CONTEXT->begin(token);
+    CONTEXT->begin();
 }
 
 void CCoreManagerResource::onRedeemPrincipalToken(uint32_t seq, const char* token) {

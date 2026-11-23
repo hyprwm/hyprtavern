@@ -4,6 +4,7 @@
 #include "../../barmaids/PermissionBarmaid.hpp"
 #include "../../core/Client.hpp"
 #include "../../security/PermissionContext.hpp"
+#include "../../security/SavedContext.hpp"
 
 #include <common/Memory.hpp>
 
@@ -16,14 +17,14 @@
 #include <string>
 #include <vector>
 
-// grants for a single client connection, optionally persisted under a token
+// grants for a single client connection. Permanent ones are saved for the application, and shared by all its contexts.
 class CPermissionContextResource {
   public:
     CPermissionContextResource(SP<CHpHyprtavernPermissionContextV1Object> resource, SP<Core::CClient> client);
     ~CPermissionContextResource();
 
-    // restores the saved context selected by token, or creates a new one when possible
-    void                           begin(const std::string& token);
+    // restores the application's saved context, if it has one
+    void                           begin();
 
     uint64_t                       clientID() const;
 
@@ -31,9 +32,9 @@ class CPermissionContextResource {
 
   private:
     enum class eState : uint8_t {
-        SESSION,     // no verified saved context, session grants and policy only
+        SESSION,     // no saved context can be used, session grants and policy only
         RESTORING,   // waiting on the store, requests are deferred
-        PERSISTENT,  // backed by a verified saved context
+        PERSISTENT,  // the application's saved context is restored, or there is none yet
         UNAVAILABLE, // inert
     };
 
@@ -42,7 +43,7 @@ class CPermissionContextResource {
 
     void restore();
     void onRestored(std::expected<std::string, Barmaids::CKvBarmaid::eError> value);
-    void create();
+    void adopt(const Security::SSavedContext& saved);
     void settle(eState state);
     void makeUnavailable();
 
@@ -52,8 +53,8 @@ class CPermissionContextResource {
     void persistGrant(const std::string& permission);
     void finish(const std::string& permission, uint32_t result, Security::eGrantLifetime lifetime = Security::eGrantLifetime::SESSION);
 
-    // writes the saved context, with an extra permanent grant if given
-    void                                       save(const std::string& token, std::optional<std::string> extraGrant, std::function<void(bool stored)>&& done);
+    // writes the application's saved context, with an extra permanent grant if given. stored is only true if that grant made it in.
+    void                                       save(std::optional<std::string> extraGrant, std::function<void(bool stored)>&& done);
 
     SP<CHpHyprtavernPermissionContextV1Object> m_resource;
     WP<Core::CClient>                          m_client;
@@ -61,11 +62,9 @@ class CPermissionContextResource {
     SP<Security::CPermissionContext>           m_context;
     eState                                     m_state = eState::SESSION;
 
-    // the durable token, empty without a verified saved context
-    std::string m_token;
-
-    // the supplied token, an unverified restoration hint
-    std::string                                                      m_hint;
+    // the owner of the application's saved context, and where it's stored
+    Security::SAppIdentity                                           m_owner;
+    std::string                                                      m_key;
 
     std::vector<std::pair<std::string, bool>>                        m_deferred;
     std::map<std::string, UP<Barmaids::CPermissionBarmaid::CPrompt>> m_prompts;

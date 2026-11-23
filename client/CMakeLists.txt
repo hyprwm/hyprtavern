@@ -16,7 +16,6 @@ set_target_properties(
              VISIBILITY_INLINES_HIDDEN ON)
 
 hyprwire_protocol(hyprtavern-client hp_hyprtavern_core_v1 CLIENT)
-hyprwire_protocol(hyprtavern-client hp_hyprtavern_kv_store_v1 CLIENT)
 
 set(PREFIX ${CMAKE_INSTALL_PREFIX})
 set(INCLUDE ${CMAKE_INSTALL_FULL_INCLUDEDIR})

@@ -5,12 +5,20 @@
 
 #include <glaze/glaze.hpp>
 
+#include <format>
 #include <unordered_set>
 
 using namespace Security;
 
 namespace {
     constexpr uint32_t SAVED_CONTEXT_VERSION = 1;
+
+    // see hp_hyprtavern_kv_store_v1
+    constexpr size_t MAX_KEY_LENGTH = 1024;
+
+    bool             isKeyCharacter(char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || std::string_view{":/.,-+="}.contains(c);
+    }
 
     struct SSavedContextRecord {
         uint32_t                 version   = SAVED_CONTEXT_VERSION;
@@ -64,4 +72,21 @@ std::optional<SSavedContext> Security::parseSavedContext(std::string_view data) 
         .display = {.name = RECORD->displayName, .description = RECORD->displayDescription},
         .grants  = RECORD->grants,
     };
+}
+
+std::optional<std::string> Security::savedContextKey(const SAppIdentity& owner) {
+    std::string key = std::format("context:{}:", sc<uint32_t>(owner.kind));
+
+    // ids may contain anything, so whatever keys don't allow is escaped. ? is never kept, so this is unambiguous.
+    for (const auto C : owner.id) {
+        if (isKeyCharacter(C))
+            key += C;
+        else
+            key += std::format("?{:02x}", sc<uint8_t>(C));
+    }
+
+    if (key.size() > MAX_KEY_LENGTH)
+        return std::nullopt;
+
+    return key;
 }

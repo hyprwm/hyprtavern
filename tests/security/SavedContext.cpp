@@ -38,6 +38,16 @@ TEST(SavedContext, RejectsMalformedRecords) {
     EXPECT_FALSE(parseSavedContext("{\"version\":1,\"ownerKind\":0,\"ownerId\":\"\",\"displayName\":\"\",\"displayDescription\":\"\",\"grants\":[]}"));
 }
 
+TEST(SavedContext, KeysByOwner) {
+    EXPECT_EQ(savedContextKey(CONTEXT.owner), "context:2:org.example.App");
+
+    // keys allow only some characters, so the others are escaped
+    EXPECT_EQ(savedContextKey({.kind = eIdentityKind::HOST_EXECUTABLE, .id = "/opt/my app/a_b?", .stable = true}), "context:1:/opt/my?20app/a?5fb?3f");
+    EXPECT_NE(savedContextKey({.kind = eIdentityKind::FLATPAK, .id = "a?20b", .stable = true}), savedContextKey({.kind = eIdentityKind::FLATPAK, .id = "a b", .stable = true}));
+
+    EXPECT_FALSE(savedContextKey({.kind = eIdentityKind::HOST_EXECUTABLE, .id = std::string(1024, 'a'), .stable = true}));
+}
+
 TEST(SavedContext, KeepsGrantsFromNewerCatalogs) {
     EXPECT_TRUE(parseSavedContext(withGrants({"core.settings.basic.future"})));
 }

@@ -98,10 +98,6 @@ std::expected<void, eError> CTavern::init(const STavernOptions& options, Clock::
 
     m_permissions = makeUnique<CPermissions>(m_manager, options);
 
-    // best effort, permissions work without persistence too
-    if (options.persistPermissions)
-        m_permissions->loadToken(*this, deadline);
-
     return {};
 }
 

@@ -1,8 +1,5 @@
 #pragma once
 
-#include "Helpers.hpp"
-#include "KvClient.hpp"
-
 #include <hyprtavern-client/Tavern.hpp>
 
 #include <common/Memory.hpp>
@@ -14,15 +11,10 @@
 #include <vector>
 
 namespace Hyprtavern {
-    class CTavern;
-
-    // the connection's permission context, created on the first request
+    // the connection's permission context, created on the first request. Permanent grants are restored by the tavern.
     class CPermissions {
       public:
         CPermissions(SP<CCHpHyprtavernCoreManagerV1Object> manager, const STavernOptions& options);
-
-        // reads the saved token from the app's kv values. New tokens are only saved if that worked.
-        void loadToken(CTavern& tavern, Clock::time_point deadline);
 
         void request(const std::vector<std::string>& permissions, ePermissionMode mode, PermissionCallback&& done);
         void sweep();
@@ -39,18 +31,14 @@ namespace Hyprtavern {
             void               release();
         };
 
-        void                                        ensureContext();
-        void                                        onToken(const std::string& token);
-        void                                        onResult(const std::string& permission, uint32_t result, uint32_t mode);
-        void                                        onUnavailable();
+        void                                                  ensureContext();
+        void                                                  onResult(const std::string& permission, uint32_t result, uint32_t mode);
+        void                                                  onUnavailable();
 
-        SP<CCHpHyprtavernCoreManagerV1Object>       m_manager;
-        SP<CCHpHyprtavernPermissionContextV1Object> m_context;
-        std::string                                 m_appName, m_appDescription;
+        SP<CCHpHyprtavernCoreManagerV1Object>                 m_manager;
+        SP<CCHpHyprtavernPermissionContextV1Object>           m_context;
+        std::string                                           m_appName, m_appDescription;
 
-        // only set if the saved token could be read, so a failed lookup never replaces it
-        UP<CKvClient>                                         m_kv;
-        std::string                                           m_token;
         bool                                                  m_unavailable = false;
 
         std::unordered_map<std::string, std::vector<SBatch*>> m_pending;

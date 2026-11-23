@@ -1,5 +1,4 @@
 #include "Permissions.hpp"
-#include "Tavern.hpp"
 
 #include <common/PermissionName.hpp>
 
@@ -10,9 +9,7 @@
 using namespace Hyprtavern;
 
 namespace {
-    constexpr const char* TOKEN_KEY = "core:persistence-token";
-
-    SPermissionResult     resultFromWire(uint32_t result, uint32_t mode) {
+    SPermissionResult resultFromWire(uint32_t result, uint32_t mode) {
         switch (result) {
             case HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_RESULT_GRANTED:
             case HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_RESULT_ALREADY_GRANTED:
@@ -44,27 +41,12 @@ CPermissions::CPermissions(SP<CCHpHyprtavernCoreManagerV1Object> manager, const 
     ;
 }
 
-void CPermissions::loadToken(CTavern& tavern, Clock::time_point deadline) {
-    auto kv = CKvClient::connect(tavern, deadline);
-    if (!kv)
-        return;
-
-    // a failed lookup is not a missing token, so a saved one must not be replaced then
-    const auto TOKEN = kv->get(TOKEN_KEY, deadline);
-    if (!TOKEN)
-        return;
-
-    m_token = TOKEN->value_or("");
-    m_kv    = std::move(kv);
-}
-
 void CPermissions::ensureContext() {
     if (m_context)
         return;
 
-    m_context = makeShared<CCHpHyprtavernPermissionContextV1Object>(m_manager->sendCreatePermissionContext(m_token.c_str()));
+    m_context = makeShared<CCHpHyprtavernPermissionContextV1Object>(m_manager->sendCreatePermissionContext());
 
-    m_context->setPersistenceToken([this](const char* token) { onToken(token); });
     m_context->setUnavailable([this] { onUnavailable(); });
     m_context->setPermissionResult([this](const char* permission, uint32_t result, uint32_t mode) { onResult(permission, result, mode); });
 
@@ -105,19 +87,6 @@ void CPermissions::request(const std::vector<std::string>& permissions, ePermiss
 void CPermissions::sweep() {
     // batches are only done once their callbacks returned, so none of these is running
     std::erase_if(m_batches, [](const auto& batch) { return batch->done; });
-}
-
-void CPermissions::onToken(const std::string& token) {
-    // an empty token means no saved context yet, it must never replace ours
-    if (!m_kv || token.empty() || token == m_token)
-        return;
-
-    if (!m_kv->set(TOKEN_KEY, token, Clock::now() + DEFAULT_TIMEOUT)) {
-        m_kv.reset();
-        return;
-    }
-
-    m_token = token;
 }
 
 void CPermissions::onResult(const std::string& permission, uint32_t result, uint32_t mode) {

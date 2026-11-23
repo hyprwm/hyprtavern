@@ -1,8 +1,6 @@
 #include "PermissionContext.hpp"
 #include "Arguments.hpp"
 #include "CoreProtocol.hpp"
-#include "../../helpers/Token.hpp"
-#include "../../security/SavedContext.hpp"
 
 #include <common/Limits.hpp>
 #include <common/Log.hpp>
@@ -10,13 +8,13 @@
 
 #include <algorithm>
 #include <format>
+#include <unordered_map>
 
 using namespace Security;
 
 namespace {
-    std::string contextKey(const std::string& token) {
-        return std::format("context:{}", token);
-    }
+    // the latest stored saved context of each application, by key, so the writes of all its contexts build on each other
+    std::unordered_map<std::string, SSavedContext> g_savedContexts;
 }
 
 CPermissionContextResource::CPermissionContextResource(SP<CHpHyprtavernPermissionContextV1Object> resource, SP<Core::CClient> client) :
@@ -38,22 +36,27 @@ uint64_t CPermissionContextResource::clientID() const {
     return m_clientID;
 }
 
-void CPermissionContextResource::begin(const std::string& token) {
-    // only stable identities may own saved contexts, retrying cannot help others
-    if (!m_client->principal().identity.persistable()) {
-        m_resource->sendPersistenceToken("");
+void CPermissionContextResource::begin() {
+    m_owner = m_client->principal().identity;
+
+    // only stable identities may own saved contexts
+    if (!m_owner.persistable())
+        return;
+
+    const auto KEY = savedContextKey(m_owner);
+    if (!KEY) {
+        g_logger->log(LOG_WARN, "the identity of client {} is too long to save its permissions", m_clientID);
         return;
     }
 
-    m_hint = token;
+    m_key = *KEY;
 
     if (Barmaids::kv->available()) {
         restore();
         return;
     }
 
-    // keep the hint, and retry once the store is up
-    m_resource->sendPersistenceToken("");
+    // session grants only, until the store is up
     m_storeListener = Barmaids::kv->m_storeEvents.available.listen([this] {
         m_storeListener.reset();
         restore();
@@ -61,15 +64,15 @@ void CPermissionContextResource::begin(const std::string& token) {
 }
 
 void CPermissionContextResource::restore() {
-    m_state = eState::RESTORING;
-
-    // tokens we never issued cannot select a saved context
-    if (!Token::isWellFormed(m_hint)) {
-        create();
+    // another context of the application may have stored it already
+    if (const auto SAVED = g_savedContexts.find(m_key); SAVED != g_savedContexts.end()) {
+        adopt(SAVED->second);
         return;
     }
 
-    Barmaids::kv->get(contextKey(m_hint), [self = m_self](std::expected<std::string, Barmaids::CKvBarmaid::eError> value) {
+    m_state = eState::RESTORING;
+
+    Barmaids::kv->get(m_key, [self = m_self](std::expected<std::string, Barmaids::CKvBarmaid::eError> value) {
         if (const auto SELF = self.lock())
             SELF->onRestored(std::move(value));
     });
@@ -77,55 +80,48 @@ void CPermissionContextResource::restore() {
 
 void CPermissionContextResource::onRestored(std::expected<std::string, Barmaids::CKvBarmaid::eError> value) {
     if (!value) {
-        // unknown tokens are never adopted, a fresh one is generated instead
+        // nothing saved yet, it's created with the first permanent grant
         if (value.error() == Barmaids::CKvBarmaid::eError::MISSING) {
-            create();
+            settle(eState::PERSISTENT);
             return;
         }
 
-        // a failed lookup is not a missing value, so the client must keep its token
+        // a failed lookup is not a missing value, so writing could replace saved grants
         settle(eState::SESSION);
-        m_resource->sendPersistenceToken("");
         return;
     }
 
-    const auto SAVED = parseSavedContext(*value);
+    // a newer one, if another context of the application stored it in the meantime
+    auto saved = g_savedContexts.find(m_key);
 
-    if (!SAVED || SAVED->owner != m_client->principal().identity) {
-        g_logger->log(LOG_WARN, "client {} tried to restore a permission context it does not own", m_client->id());
-        makeUnavailable();
-        return;
+    if (saved == g_savedContexts.end()) {
+        const auto PARSED = parseSavedContext(*value);
+
+        // never overwritten, so nothing is lost
+        if (!PARSED || PARSED->owner != m_owner) {
+            g_logger->log(LOG_ERR, "the saved permissions of client {} are malformed", m_clientID);
+            makeUnavailable();
+            return;
+        }
+
+        saved = g_savedContexts.emplace(m_key, *PARSED).first;
     }
 
+    adopt(saved->second);
+}
+
+void CPermissionContextResource::adopt(const SSavedContext& saved) {
     // all or nothing
-    if (!m_context->restore(SAVED->grants)) {
+    if (!m_context->restore(saved.grants)) {
         makeUnavailable();
         return;
     }
 
     // a display identity set during this session wins
     if (m_context->m_display == SDisplayIdentity{})
-        m_context->m_display = SAVED->display;
+        m_context->m_display = saved.display;
 
-    m_token = m_hint;
     settle(eState::PERSISTENT);
-    m_resource->sendPersistenceToken(m_token.c_str());
-}
-
-void CPermissionContextResource::create() {
-    const auto TOKEN = Token::generate();
-
-    save(TOKEN, std::nullopt, [this, TOKEN](bool stored) {
-        if (!stored) {
-            settle(eState::SESSION);
-            m_resource->sendPersistenceToken("");
-            return;
-        }
-
-        m_token = TOKEN;
-        settle(eState::PERSISTENT);
-        m_resource->sendPersistenceToken(m_token.c_str());
-    });
 }
 
 void CPermissionContextResource::settle(eState state) {
@@ -147,28 +143,35 @@ void CPermissionContextResource::makeUnavailable() {
     m_resource->sendUnavailable();
 }
 
-void CPermissionContextResource::save(const std::string& token, std::optional<std::string> extraGrant, std::function<void(bool stored)>&& done) {
-    // produced when sent, so it includes every grant persisted before it
-    const auto PRODUCE = [self = m_self, extraGrant]() -> std::optional<std::string> {
+void CPermissionContextResource::save(std::optional<std::string> extraGrant, std::function<void(bool stored)>&& done) {
+    auto record = makeShared<SSavedContext>();
+
+    // produced when sent, so it builds on every write before it, from any context of the application
+    const auto PRODUCE = [self = m_self, record, extraGrant]() -> std::optional<std::string> {
         const auto SELF = self.lock();
         if (!SELF || !SELF->m_context)
             return std::nullopt;
 
-        SSavedContext saved = {
-            .owner   = SELF->m_client->principal().identity,
-            .display = SELF->m_context->m_display,
-            .grants  = SELF->m_context->permanentGrants(),
-        };
+        const auto SAVED = g_savedContexts.find(SELF->m_key);
+        *record          = SAVED == g_savedContexts.end() ? SSavedContext{.owner = SELF->m_owner} : SAVED->second;
 
-        if (extraGrant && !std::ranges::contains(saved.grants, *extraGrant))
-            saved.grants.emplace_back(*extraGrant);
+        // an empty display identity never replaces a saved one
+        if (SELF->m_context->m_display != SDisplayIdentity{})
+            record->display = SELF->m_context->m_display;
 
-        return serializeSavedContext(saved);
+        // a full one takes no more grants, so it can always be restored
+        if (extraGrant && !std::ranges::contains(record->grants, *extraGrant) && record->grants.size() < MAX_GRANTS)
+            record->grants.emplace_back(*extraGrant);
+
+        return serializeSavedContext(*record);
     };
 
-    Barmaids::kv->set(contextKey(token), PRODUCE, [self = m_self, done = std::move(done)](bool stored) {
+    Barmaids::kv->set(m_key, PRODUCE, [self = m_self, key = m_key, record, extraGrant, done = std::move(done)](bool stored) {
+        if (stored)
+            g_savedContexts[key] = *record;
+
         if (self)
-            done(stored);
+            done(stored && (!extraGrant || std::ranges::contains(record->grants, *extraGrant)));
     });
 }
 
@@ -185,8 +188,9 @@ void CPermissionContextResource::onSetDisplayIdentity(const char* name, const ch
 
     m_context->m_display = DISPLAY;
 
-    if (m_state == eState::PERSISTENT)
-        save(m_token, std::nullopt, [](bool) {});
+    // saved contexts are only created with a permanent grant
+    if (m_state == eState::PERSISTENT && g_savedContexts.contains(m_key))
+        save(std::nullopt, [](bool) {});
 }
 
 void CPermissionContextResource::onRequestPermission(const char* permission, uint32_t mode) {
@@ -295,7 +299,7 @@ void CPermissionContextResource::grantForSession(const std::string& permission) 
 
 void CPermissionContextResource::persistGrant(const std::string& permission) {
     // consent is not durability: only report a permanent grant once it is stored
-    save(m_token, permission, [this, permission](bool stored) {
+    save(permission, [this, permission](bool stored) {
         if (!stored) {
             g_logger->log(LOG_WARN, "failed to persist {}, granting it for the session", permission);
             grantForSession(permission);
