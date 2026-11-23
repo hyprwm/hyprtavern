@@ -61,7 +61,11 @@ std::expected<uint32_t, eRegistryError> CRegistry::add(uint64_t owner, Security:
     if (m_objects.size() >= MAX_OBJECTS || m_nextID == 0)
         return std::unexpected(eRegistryError::LIMIT_REACHED);
 
+    if (const auto OWNED = m_owned.find(owner); OWNED != m_owned.end() && OWNED->second >= MAX_OBJECTS_PER_OWNER)
+        return std::unexpected(eRegistryError::LIMIT_REACHED);
+
     const auto ID = m_nextID++;
+    ++m_owned[owner];
 
     m_objects.emplace(ID,
                       SObject{
@@ -87,6 +91,9 @@ void CRegistry::remove(uint32_t id) {
         if (PROVIDERS->second.empty())
             m_providers.erase(PROVIDERS);
     }
+
+    if (const auto OWNED = m_owned.find(IT->second.owner); --OWNED->second == 0)
+        m_owned.erase(OWNED);
 
     m_objects.erase(IT);
 }

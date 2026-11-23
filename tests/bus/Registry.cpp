@@ -35,11 +35,26 @@ TEST(Registry, NeverReusesIDs) {
 TEST(Registry, BoundsLiveObjects) {
     CRegistry registry;
 
+    // spread over owners, so only the bus-wide bound applies
     for (size_t i = 0; i < MAX_OBJECTS; ++i) {
+        ASSERT_TRUE(registry.add(1 + i / MAX_OBJECTS_PER_OWNER, {}, "object", {}));
+    }
+
+    EXPECT_EQ(registry.add(0, {}, "object", {}).error(), eRegistryError::LIMIT_REACHED);
+
+    registry.remove(1);
+    EXPECT_TRUE(registry.add(0, {}, "object", {}));
+}
+
+TEST(Registry, BoundsObjectsPerOwner) {
+    CRegistry registry;
+
+    for (size_t i = 0; i < MAX_OBJECTS_PER_OWNER; ++i) {
         ASSERT_TRUE(registry.add(1, {}, "object", {}));
     }
 
     EXPECT_EQ(registry.add(1, {}, "object", {}).error(), eRegistryError::LIMIT_REACHED);
+    EXPECT_TRUE(registry.add(2, {}, "object", {}));
 
     registry.remove(1);
     EXPECT_TRUE(registry.add(1, {}, "object", {}));

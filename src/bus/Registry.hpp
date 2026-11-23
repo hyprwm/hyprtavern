@@ -13,14 +13,16 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
 namespace Bus {
     // so query results always fit an array
-    constexpr size_t           MAX_OBJECTS    = MAX_ARRAY_ELEMENTS;
-    constexpr size_t           MAX_PROTOCOLS  = 9999;
-    constexpr size_t           MAX_PROPERTIES = 9999;
+    constexpr size_t           MAX_OBJECTS           = MAX_ARRAY_ELEMENTS;
+    constexpr size_t           MAX_OBJECTS_PER_OWNER = 512;
+    constexpr size_t           MAX_PROTOCOLS         = 512;
+    constexpr size_t           MAX_PROPERTIES        = 512;
 
     constexpr std::string_view PROTOCOL_BARMAID                   = "hp_hyprtavern_barmaid_v1";
     constexpr std::string_view PROTOCOL_KV_STORE                  = "hp_hyprtavern_kv_store_v1";
@@ -99,6 +101,9 @@ namespace Bus {
 
         // the objects exposing each protocol, and whether they do so exclusively
         std::map<std::string, std::map<uint32_t, bool>, std::less<>> m_providers;
+
+        // live objects of each owner
+        std::unordered_map<uint64_t, size_t> m_owned;
     };
 
     inline UP<CRegistry> registry;
