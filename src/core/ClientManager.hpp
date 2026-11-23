@@ -3,7 +3,7 @@
 #include "Client.hpp"
 
 #include <optional>
-#include <vector>
+#include <unordered_map>
 
 namespace Core {
     class CClientManager {
@@ -19,9 +19,12 @@ namespace Core {
         SP<CClient> get(uint64_t id) const;
 
       private:
-        std::vector<SP<CClient>> m_clients;
-        uint64_t                 m_nextID             = 1;
-        bool                     m_enforcePermissions = false;
+        // by connection, and by id
+        std::unordered_map<Hyprwire::IServerClient*, SP<CClient>> m_clients;
+        std::unordered_map<uint64_t, WP<CClient>>                 m_ids;
+
+        uint64_t                                                  m_nextID             = 1;
+        bool                                                      m_enforcePermissions = false;
     };
 
     inline UP<CClientManager> clients;

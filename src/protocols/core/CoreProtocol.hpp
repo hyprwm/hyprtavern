@@ -4,7 +4,7 @@
 
 #include <hp_hyprtavern_core_v1-server.hpp>
 
-#include <vector>
+#include <unordered_map>
 
 class CCoreManagerResource;
 class CBusObjectResource;
@@ -41,24 +41,33 @@ class CCoreProtocol {
         return makeShared<T>(std::move(object));
     }
 
-    void                                          bindManager(SP<Hyprwire::IObject> object);
+    // keeps a resource alive until it's destroyed
+    template <typename T>
+    SP<T> keep(std::unordered_map<T*, SP<T>>& resources, SP<T> resource) {
+        resources.emplace(resource.get(), resource);
+        return resource;
+    }
 
-    void                                          destroyResource(CCoreManagerResource* resource);
-    void                                          destroyResource(CBusObjectResource* resource);
-    void                                          destroyResource(CBusQueryResource* resource);
-    void                                          destroyResource(CBusObjectHandleResource* resource);
-    void                                          destroyResource(CPermissionContextResource* resource);
-    void                                          destroyResource(CConnectionPrincipalResource* resource);
+    void                                                                                bindManager(SP<Hyprwire::IObject> object);
 
-    std::vector<SP<CCoreManagerResource>>         m_managers;
-    std::vector<SP<CBusObjectResource>>           m_busObjects;
-    std::vector<SP<CBusQueryResource>>            m_queries;
-    std::vector<SP<CBusObjectHandleResource>>     m_handles;
-    std::vector<SP<CPermissionContextResource>>   m_contexts;
-    std::vector<SP<CConnectionPrincipalResource>> m_principals;
+    void                                                                                destroyResource(CCoreManagerResource* resource);
+    void                                                                                destroyResource(CBusObjectResource* resource);
+    void                                                                                destroyResource(CBusQueryResource* resource);
+    void                                                                                destroyResource(CBusObjectHandleResource* resource);
+    void                                                                                destroyResource(CPermissionContextResource* resource);
+    void                                                                                destroyResource(CConnectionPrincipalResource* resource);
 
-    WP<Hyprwire::IServerSocket>                   m_socket;
-    bool                                          m_ready = false;
+    std::unordered_map<CCoreManagerResource*, SP<CCoreManagerResource>>                 m_managers;
+    std::unordered_map<CBusQueryResource*, SP<CBusQueryResource>>                       m_queries;
+    std::unordered_map<CBusObjectHandleResource*, SP<CBusObjectHandleResource>>         m_handles;
+    std::unordered_map<CConnectionPrincipalResource*, SP<CConnectionPrincipalResource>> m_principals;
+
+    // by bus object id, and by client id
+    std::unordered_map<uint32_t, SP<CBusObjectResource>>         m_busObjects;
+    std::unordered_map<uint64_t, SP<CPermissionContextResource>> m_contexts;
+
+    WP<Hyprwire::IServerSocket>                                  m_socket;
+    bool                                                         m_ready = false;
 
     friend class CCoreManagerResource;
     friend class CBusObjectResource;

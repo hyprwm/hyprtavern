@@ -57,6 +57,7 @@ class CPermissionContextResource {
 
     SP<CHpHyprtavernPermissionContextV1Object> m_resource;
     WP<Core::CClient>                          m_client;
+    uint64_t                                   m_clientID = 0;
     SP<Security::CPermissionContext>           m_context;
     eState                                     m_state = eState::SESSION;
 

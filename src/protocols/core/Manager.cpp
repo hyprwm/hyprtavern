@@ -67,7 +67,7 @@ void CCoreManagerResource::onCreatePermissionContext(uint32_t seq, const char* t
     if (!object)
         return;
 
-    const auto CONTEXT = PROTO::core->m_contexts.emplace_back(makeShared<CPermissionContextResource>(std::move(object), m_client.lock()));
+    const auto CONTEXT = PROTO::core->m_contexts.emplace(m_client->id(), makeShared<CPermissionContextResource>(std::move(object), m_client.lock())).first->second;
     CONTEXT->m_self    = CONTEXT;
     CONTEXT->begin(token);
 }
@@ -82,7 +82,7 @@ void CCoreManagerResource::onRedeemPrincipalToken(uint32_t seq, const char* toke
     if (!object)
         return;
 
-    PROTO::core->m_principals.emplace_back(makeShared<CConnectionPrincipalResource>(std::move(object), std::move(principal)));
+    PROTO::core->keep(PROTO::core->m_principals, makeShared<CConnectionPrincipalResource>(std::move(object), std::move(principal)));
 }
 
 void CCoreManagerResource::onGetBusObject(uint32_t seq, const char* name, const std::vector<const char*>& requirements) {
@@ -108,7 +108,7 @@ void CCoreManagerResource::onGetBusObject(uint32_t seq, const char* name, const 
         return;
     }
 
-    PROTO::core->m_busObjects.emplace_back(makeShared<CBusObjectResource>(std::move(object), *ID, CLIENT->role()));
+    PROTO::core->m_busObjects.emplace(*ID, makeShared<CBusObjectResource>(std::move(object), *ID, CLIENT->role()));
 }
 
 void CCoreManagerResource::onGetQueryObject(uint32_t seq, const std::vector<const char*>& protocols, uint32_t protocolMode, const std::vector<const char*>& properties,
@@ -145,7 +145,7 @@ void CCoreManagerResource::onGetQueryObject(uint32_t seq, const std::vector<cons
     if (!object)
         return;
 
-    PROTO::core->m_queries.emplace_back(makeShared<CBusQueryResource>(std::move(object), matches));
+    PROTO::core->keep(PROTO::core->m_queries, makeShared<CBusQueryResource>(std::move(object), matches));
 }
 
 void CCoreManagerResource::onGetObjectHandle(uint32_t seq, uint32_t id) {
@@ -156,7 +156,7 @@ void CCoreManagerResource::onGetObjectHandle(uint32_t seq, uint32_t id) {
     if (!object)
         return;
 
-    PROTO::core->m_handles.emplace_back(makeShared<CBusObjectHandleResource>(std::move(object), m_client.lock(), id));
+    PROTO::core->keep(PROTO::core->m_handles, makeShared<CBusObjectHandleResource>(std::move(object), m_client.lock(), id));
 }
 
 void CCoreManagerResource::onUpdateEnvironment(const std::vector<const char*>& names, const std::vector<const char*>& values) {

@@ -2,8 +2,6 @@
 
 #include <common/Log.hpp>
 
-#include <algorithm>
-
 using namespace Core;
 
 CClientManager::CClientManager(bool enforcePermissions) : m_enforcePermissions(enforcePermissions) {
@@ -24,27 +22,31 @@ SP<CClient> CClientManager::add(const SP<Hyprwire::IServerClient>& wire, Bus::eP
     } else if (CREDENTIALS)
         principal.identity = Security::probeProcess(CREDENTIALS->pid, CREDENTIALS->uid);
 
-    auto client = m_clients.emplace_back(makeShared<CClient>(wire, m_nextID++, principal, Security::policyFor(principal, m_enforcePermissions), role));
+    auto client = makeShared<CClient>(wire, m_nextID++, principal, Security::policyFor(principal, m_enforcePermissions), role);
+
+    m_clients[wire.get()] = client;
+    m_ids[client->id()]   = client;
 
     g_logger->log(LOG_DEBUG, "client {} connected: pid {}, identity {} ({})", client->id(), principal.pid, principal.identity.id, sc<int>(principal.identity.kind));
 
     // runs after the client's wire objects are torn down
-    wire->setDisconnectHandler([this, weak = WP<CClient>{client}] {
-        if (const auto CLIENT = weak.lock()) {
-            g_logger->log(LOG_DEBUG, "client {} disconnected", CLIENT->id());
-            std::erase(m_clients, CLIENT);
-        }
+    wire->setDisconnectHandler([this, raw = wire.get(), id = client->id()] {
+        g_logger->log(LOG_DEBUG, "client {} disconnected", id);
+        m_clients.erase(raw);
+        m_ids.erase(id);
     });
 
     return client;
 }
 
 SP<CClient> CClientManager::get(const SP<Hyprwire::IServerClient>& wire) const {
-    const auto IT = std::ranges::find_if(m_clients, [&wire](const auto& client) { return client->wire() == wire; });
-    return IT == m_clients.end() ? nullptr : *IT;
+    const auto IT = m_clients.find(wire.get());
+
+    // a stale entry never matches, its connection is gone
+    return IT != m_clients.end() && IT->second->wire() == wire ? IT->second : nullptr;
 }
 
 SP<CClient> CClientManager::get(uint64_t id) const {
-    const auto IT = std::ranges::find_if(m_clients, [id](const auto& client) { return client->id() == id; });
-    return IT == m_clients.end() ? nullptr : *IT;
+    const auto IT = m_ids.find(id);
+    return IT == m_ids.end() ? nullptr : IT->second.lock();
 }

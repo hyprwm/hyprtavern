@@ -20,7 +20,7 @@ namespace {
 }
 
 CPermissionContextResource::CPermissionContextResource(SP<CHpHyprtavernPermissionContextV1Object> resource, SP<Core::CClient> client) :
-    m_resource(std::move(resource)), m_client(client), m_context(makeShared<CPermissionContext>()) {
+    m_resource(std::move(resource)), m_client(client), m_clientID(client->id()), m_context(makeShared<CPermissionContext>()) {
     m_resource->setDestroy([this] { PROTO::core->destroyResource(this); });
     m_resource->setOnDestroy([this] { PROTO::core->destroyResource(this); });
 
@@ -35,7 +35,7 @@ CPermissionContextResource::~CPermissionContextResource() {
 }
 
 uint64_t CPermissionContextResource::clientID() const {
-    return m_client ? m_client->id() : 0;
+    return m_clientID;
 }
 
 void CPermissionContextResource::begin(const std::string& token) {
