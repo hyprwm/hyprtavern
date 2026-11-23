@@ -58,7 +58,8 @@ void CBusObject::expose(const SExposeOptions& options) {
         m_server->addImplementation(std::move(implementation));
     }
 
-    m_object->sendExposeProtocol(NAME.c_str(), version, Wire::toCStrings(options.requiredPermissions), options.exclusive);
+    m_object->sendExposeProtocol(NAME.c_str(), version, Wire::toCStrings(options.requiredPermissions),
+                                 options.exclusive ? HP_HYPRTAVERN_CORE_V1_EXCLUSIVITY_MODE_EXCLUSIVE : HP_HYPRTAVERN_CORE_V1_EXCLUSIVITY_MODE_SHARED);
 }
 
 std::expected<void, eExposeError> CBusObject::exposeSync(const SExposeOptions& options) {

@@ -9,10 +9,13 @@
 using namespace Bus;
 
 namespace {
-    constexpr auto ANYONE = [](const SObject&) { return true; };
+    constexpr auto               ANYONE = [](const SObject&) { return true; };
 
-    uint32_t       addObject(CRegistry& registry, const std::string& name = "object") {
-        return *registry.add(1, {}, name, {});
+    const Security::SAppIdentity HOST    = {.kind = Security::eIdentityKind::HOST_EXECUTABLE, .id = "/usr/bin/example", .stable = true};
+    const Security::SAppIdentity FLATPAK = {.kind = Security::eIdentityKind::FLATPAK, .id = "org.example.App", .stable = true};
+
+    uint32_t                     addObject(CRegistry& registry, const std::string& name = "object", const Security::SAppIdentity& provider = HOST) {
+        return *registry.add(1, provider, name, {});
     }
 
     SProtocol protocol(const std::string& name, bool exclusive = false, std::vector<std::string> requirements = {}) {
@@ -83,6 +86,16 @@ TEST(Registry, EnforcesExclusivityBothWays) {
 
     registry.remove(A);
     EXPECT_TRUE(registry.exposeProtocol(B, eProviderRole::NONE, protocol("exclusive_v1", true)));
+}
+
+TEST(Registry, ReservesExclusivityForHostAndInternalProviders) {
+    CRegistry  registry;
+    const auto SANDBOXED = addObject(registry, "object", FLATPAK);
+    const auto INTERNAL  = addObject(registry, "object", {.kind = Security::eIdentityKind::INTERNAL, .id = "hyprtavern-kv", .stable = true});
+
+    EXPECT_EQ(registry.exposeProtocol(SANDBOXED, eProviderRole::NONE, protocol("example_v1", true)).error(), eRegistryError::UNAUTHORIZED_PROVIDER);
+    EXPECT_TRUE(registry.exposeProtocol(SANDBOXED, eProviderRole::NONE, protocol("example_v1")));
+    EXPECT_TRUE(registry.exposeProtocol(INTERNAL, eProviderRole::NONE, protocol("other_v1", true)));
 }
 
 TEST(Registry, ReplacesRegistrationsOnTheSameObject) {

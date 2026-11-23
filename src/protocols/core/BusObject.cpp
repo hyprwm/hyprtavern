@@ -20,13 +20,19 @@ CBusObjectResource::CBusObjectResource(SP<CHpHyprtavernBusObjectV1Object> resour
     m_resource->setOnDestroy([this] { PROTO::core->destroyResource(this); });
 
     m_resource->setExposeProtocol([this](const char* name, uint32_t version, const std::vector<const char*>& requirements, uint32_t exclusive) {
+        if (exclusive > HP_HYPRTAVERN_CORE_V1_EXCLUSIVITY_MODE_EXCLUSIVE) {
+            m_resource->error(HP_HYPRTAVERN_CORE_V1_PROTOCOL_ERRORS_INVALID_ARGUMENT, "invalid exclusivity mode");
+            return;
+        }
+
         auto permissions = Arguments::permissions(requirements);
         if (!permissions) {
             m_resource->error(permissions.error(), "invalid required permissions");
             return;
         }
 
-        const auto RET = Bus::registry->exposeProtocol(m_id, m_role, {.name = name, .version = version, .requirements = std::move(*permissions), .exclusive = exclusive != 0});
+        const auto RET = Bus::registry->exposeProtocol(
+            m_id, m_role, {.name = name, .version = version, .requirements = std::move(*permissions), .exclusive = exclusive == HP_HYPRTAVERN_CORE_V1_EXCLUSIVITY_MODE_EXCLUSIVE});
         if (RET)
             return;
 

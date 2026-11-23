@@ -41,6 +41,11 @@ namespace {
 
         return {};
     }
+
+    // so sandboxed apps can't claim protocol names ahead of their real providers
+    bool mayExposeExclusively(const Security::SAppIdentity& provider) {
+        return provider.kind == Security::eIdentityKind::HOST_EXECUTABLE || provider.kind == Security::eIdentityKind::INTERNAL;
+    }
 }
 
 const SProtocol* SObject::protocol(std::string_view name) const {
@@ -110,6 +115,9 @@ std::expected<void, eRegistryError> CRegistry::exposeProtocol(uint32_t id, eProv
 
     if (const auto RET = checkInfrastructure(role, protocol); !RET)
         return RET;
+
+    if (protocol.exclusive && !mayExposeExclusively(IT->second.provider))
+        return std::unexpected(eRegistryError::UNAUTHORIZED_PROVIDER);
 
     if (const auto PROVIDERS = m_providers.find(protocol.name); PROVIDERS != m_providers.end()) {
         for (const auto& [otherID, exclusive] : PROVIDERS->second) {

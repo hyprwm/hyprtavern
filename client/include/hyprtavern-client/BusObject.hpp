@@ -29,7 +29,7 @@ namespace Hyprtavern {
         // needed to connect on this protocol, in addition to the object's requirements
         std::vector<std::string> requiredPermissions;
 
-        // no other object may expose this protocol
+        // no other object may expose this protocol. Only unsandboxed host apps may do this.
         bool exclusive = false;
     };
 
