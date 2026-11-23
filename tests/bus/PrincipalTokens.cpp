@@ -51,12 +51,33 @@ TEST(PrincipalTokens, BoundsOutstandingTokens) {
     CPrincipalTokens tokens;
     const auto       NOW = CPrincipalTokens::Clock::now();
 
+    // spread over sources, so only the total bound applies
     for (size_t i = 0; i < MAX_PRINCIPAL_TOKENS; ++i) {
-        ASSERT_FALSE(tokens.issue(SNAPSHOT, SOURCE, RECIPIENT, NOW).empty());
+        ASSERT_FALSE(tokens.issue(SNAPSHOT, SOURCE + i / MAX_PRINCIPAL_TOKENS_PER_SOURCE, RECIPIENT, NOW).empty());
     }
 
-    EXPECT_TRUE(tokens.issue(SNAPSHOT, SOURCE, RECIPIENT, NOW).empty());
-    EXPECT_FALSE(tokens.issue(SNAPSHOT, SOURCE, RECIPIENT, NOW + PRINCIPAL_TOKEN_TTL).empty());
+    EXPECT_TRUE(tokens.issue(SNAPSHOT, 0, RECIPIENT, NOW).empty());
+    EXPECT_FALSE(tokens.issue(SNAPSHOT, 0, RECIPIENT, NOW + PRINCIPAL_TOKEN_TTL).empty());
+}
+
+TEST(PrincipalTokens, BoundsOutstandingTokensPerSource) {
+    CPrincipalTokens tokens;
+    std::string      first;
+
+    for (size_t i = 0; i < MAX_PRINCIPAL_TOKENS_PER_SOURCE; ++i) {
+        const auto TOKEN = tokens.issue(SNAPSHOT, SOURCE, RECIPIENT);
+        ASSERT_FALSE(TOKEN.empty());
+
+        if (first.empty())
+            first = TOKEN;
+    }
+
+    EXPECT_TRUE(tokens.issue(SNAPSHOT, SOURCE, RECIPIENT).empty());
+    EXPECT_FALSE(tokens.issue(SNAPSHOT, OTHER, RECIPIENT).empty());
+
+    // redeeming frees a slot
+    ASSERT_TRUE(tokens.redeem(first, RECIPIENT));
+    EXPECT_FALSE(tokens.issue(SNAPSHOT, SOURCE, RECIPIENT).empty());
 }
 
 TEST(Token, GeneratesDistinctWellFormedTokens) {

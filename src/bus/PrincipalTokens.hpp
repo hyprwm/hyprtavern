@@ -16,6 +16,9 @@ namespace Bus {
     constexpr auto   PRINCIPAL_TOKEN_TTL  = std::chrono::seconds{30};
     constexpr size_t MAX_PRINCIPAL_TOKENS = 4096;
 
+    // so a single connection can't starve everyone else's connections
+    constexpr size_t MAX_PRINCIPAL_TOKENS_PER_SOURCE = 512;
+
     // admission-time state of a connecting principal, independent of its client staying alive
     struct SPrincipalSnapshot {
         Security::SPrincipal       principal;
@@ -36,7 +39,7 @@ namespace Bus {
       public:
         using Clock = std::chrono::steady_clock;
 
-        // empty when too many tokens are outstanding.
+        // empty when too many tokens are outstanding, in total or for source.
         std::string issue(SPrincipalSnapshot snapshot, uint64_t source, uint64_t recipient, Clock::time_point now = Clock::now());
 
         // only the intended recipient may redeem a token. Other attempts do not consume it.
