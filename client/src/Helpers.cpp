@@ -26,7 +26,7 @@ bool Hyprtavern::validPermissions(const std::vector<std::string>& permissions) {
 
 SIdentity Hyprtavern::identityFromWire(const char* id, uint32_t kind, uint32_t stable) {
     // kinds this library doesn't know are no identity it could reason about
-    if (kind > sc<uint32_t>(eIdentityKind::INTERNAL))
+    if (kind > sc<uint32_t>(eIdentityKind::HOST_APPLICATION))
         return {};
 
     return {.kind = sc<eIdentityKind>(kind), .id = id, .stable = stable != 0};

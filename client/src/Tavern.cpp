@@ -1,5 +1,6 @@
 #include "Tavern.hpp"
 
+#include <common/AppID.hpp>
 #include <common/Environment.hpp>
 #include <common/Limits.hpp>
 #include <common/PropertyName.hpp>
@@ -49,9 +50,9 @@ namespace {
 std::expected<SP<ITavern>, eError> ITavern::open(const STavernOptions& options, std::chrono::milliseconds timeout) {
     const auto DEADLINE = Clock::now() + timeout;
 
-    // an invalid display identity is a protocol error
+    // an invalid display identity or app id is a protocol error
     if (options.appName.size() > MAX_DISPLAY_NAME_LENGTH || options.appDescription.size() > MAX_DISPLAY_DESCRIPTION_LENGTH || !validString(options.appName) ||
-        !validString(options.appDescription))
+        !validString(options.appDescription) || (!options.appID.empty() && !Security::isValidAppID(options.appID)))
         return std::unexpected(eError::INVALID_ARGUMENT);
 
     auto socket = openSocket(options);
@@ -90,6 +91,10 @@ std::expected<void, eError> CTavern::init(const STavernOptions& options, Clock::
 
     if (const auto RET = waitUntil([this] { return m_ready; }, deadline); !RET)
         return RET;
+
+    // before anything else, as everything after may depend on our identity
+    if (!options.appID.empty())
+        m_manager->sendDeclareHostApplication(options.appID.c_str());
 
     m_permissions = makeUnique<CPermissions>(m_manager, options);
 

@@ -8,7 +8,7 @@ ePolicy Security::policyFor(const SPrincipal& principal, bool enforcePermissions
     if (principal.authority == eAuthority::INTERNAL)
         return ePolicy::BYPASS_ORDINARY;
 
-    if (!enforcePermissions && principal.identity.kind == eIdentityKind::HOST_EXECUTABLE)
+    if (!enforcePermissions && principal.identity.host())
         return ePolicy::BYPASS_ORDINARY;
 
     return ePolicy::ENFORCED;
@@ -24,7 +24,7 @@ eAuthorization Security::authorize(const SPrincipal& principal, ePolicy policy, 
         return principal.authority == eAuthority::INTERNAL ? eAuthorization::POLICY : eAuthorization::DENIED;
 
     if (permission == PERMISSION_UNSANDBOXED)
-        return principal.identity.kind == eIdentityKind::HOST_EXECUTABLE ? eAuthorization::POLICY : eAuthorization::DENIED;
+        return principal.identity.host() ? eAuthorization::POLICY : eAuthorization::DENIED;
 
     if (explicitlyGranted)
         return eAuthorization::EXPLICIT;

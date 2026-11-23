@@ -7,7 +7,7 @@
 
 constexpr uint32_t PERMISSION_AUTHENTICATION_PROTOCOL_VERSION = 1;
 
-static_assert(sc<uint32_t>(Prompts::eIdentityKind::INTERNAL) == HP_HYPRTAVERN_PERMISSION_AUTHENTICATION_V1_APPLICATION_IDENTITY_KIND_INTERNAL);
+static_assert(sc<uint32_t>(Prompts::eIdentityKind::HOST_APPLICATION) == HP_HYPRTAVERN_PERMISSION_AUTHENTICATION_V1_APPLICATION_IDENTITY_KIND_HOST_APPLICATION);
 static_assert(sc<uint32_t>(Prompts::eTransactionError::INVALID_PERMISSION) == HP_HYPRTAVERN_PERMISSION_AUTHENTICATION_V1_PROTOCOL_ERRORS_INVALID_PERMISSION);
 
 CTransactionResource::CTransactionResource(SP<CHpHyprtavernPermissionAuthenticationTransactionV1Object> resource) : m_resource(std::move(resource)) {

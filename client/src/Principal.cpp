@@ -14,7 +14,7 @@ bool SPrincipal::has(std::string_view permission) const {
         return internal;
 
     if (permission == Security::PERMISSION_UNSANDBOXED)
-        return identity.kind == eIdentityKind::HOST_EXECUTABLE;
+        return identity.kind == eIdentityKind::HOST_EXECUTABLE || identity.kind == eIdentityKind::HOST_APPLICATION;
 
     if (!Security::isValidPermission(permission) || !Security::isKnownPermission(permission))
         return false;

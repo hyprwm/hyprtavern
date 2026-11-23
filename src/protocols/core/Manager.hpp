@@ -17,6 +17,7 @@ class CCoreManagerResource {
   private:
     bool ensureReady();
 
+    void onDeclareHostApplication(const char* appID);
     void onCreatePermissionContext(uint32_t seq, const char* token);
     void onRedeemPrincipalToken(uint32_t seq, const char* token);
     void onGetBusObject(uint32_t seq, const char* name, const std::vector<const char*>& requirements);

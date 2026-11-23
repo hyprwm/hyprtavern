@@ -7,10 +7,11 @@
 namespace Prompts {
     // values match application_identity_kind in hp_hyprtavern_permission_authentication_v1
     enum class eIdentityKind : uint32_t {
-        UNKNOWN         = 0,
-        HOST_EXECUTABLE = 1,
-        FLATPAK         = 2,
-        INTERNAL        = 3,
+        UNKNOWN          = 0,
+        HOST_EXECUTABLE  = 1,
+        FLATPAK          = 2,
+        INTERNAL         = 3,
+        HOST_APPLICATION = 4,
     };
 
     // values match protocol_errors in hp_hyprtavern_permission_authentication_v1

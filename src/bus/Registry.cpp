@@ -44,7 +44,7 @@ namespace {
 
     // so sandboxed apps can't claim protocol names ahead of their real providers
     bool mayExposeExclusively(const Security::SAppIdentity& provider) {
-        return provider.kind == Security::eIdentityKind::HOST_EXECUTABLE || provider.kind == Security::eIdentityKind::INTERNAL;
+        return provider.host() || provider.kind == Security::eIdentityKind::INTERNAL;
     }
 }
 

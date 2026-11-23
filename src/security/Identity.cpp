@@ -32,6 +32,10 @@ bool SAppIdentity::persistable() const {
     return kind != eIdentityKind::UNKNOWN && stable && !id.empty();
 }
 
+bool SAppIdentity::host() const {
+    return kind == eIdentityKind::HOST_EXECUTABLE || kind == eIdentityKind::HOST_APPLICATION;
+}
+
 std::optional<std::string> Security::parseFlatpakAppID(std::string_view flatpakInfo) {
     bool inApplication = false;
 

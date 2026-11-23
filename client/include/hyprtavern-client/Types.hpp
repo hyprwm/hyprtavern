@@ -25,10 +25,11 @@ namespace Hyprtavern {
 
     // values match application_identity_kind in hp_hyprtavern_core_v1
     enum class eIdentityKind : uint8_t {
-        UNKNOWN         = 0,
-        HOST_EXECUTABLE = 1,
-        FLATPAK         = 2,
-        INTERNAL        = 3,
+        UNKNOWN          = 0,
+        HOST_EXECUTABLE  = 1,
+        FLATPAK          = 2,
+        INTERNAL         = 3,
+        HOST_APPLICATION = 4,
     };
 
     // values match bus_query_filter_mode in hp_hyprtavern_core_v1

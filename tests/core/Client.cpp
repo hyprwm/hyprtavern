@@ -50,6 +50,31 @@ TEST(Client, InspectsObjectsItCanSee) {
     EXPECT_TRUE(makeClient(ePolicy::BYPASS_ORDINARY).canInspect(PRIVATE));
 }
 
+TEST(Client, LetsOnlyHostsDeclareAppIDs) {
+    const SPrincipal HOST = {.identity = {.kind = eIdentityKind::HOST_EXECUTABLE, .id = "/usr/bin/python3", .stable = true}};
+
+    CClient          host{{}, 1, HOST, ePolicy::BYPASS_ORDINARY, Bus::eProviderRole::NONE};
+    ASSERT_TRUE(host.declareHostApplication("org.example.App"));
+    EXPECT_EQ(host.principal().identity, (SAppIdentity{.kind = eIdentityKind::HOST_APPLICATION, .id = "org.example.App", .stable = true}));
+
+    // a sandboxed app keeps its attested identity
+    auto sandboxed = makeClient();
+    ASSERT_TRUE(sandboxed.declareHostApplication("org.example.Other"));
+    EXPECT_EQ(sandboxed.principal().identity, FLATPAK.identity);
+}
+
+TEST(Client, FixesItsIdentityOnceSealed) {
+    CClient host{{}, 1, {.identity = {.kind = eIdentityKind::HOST_EXECUTABLE, .id = "/usr/bin/app", .stable = true}}, ePolicy::BYPASS_ORDINARY, Bus::eProviderRole::NONE};
+
+    host.seal();
+    EXPECT_FALSE(host.declareHostApplication("org.example.App"));
+    EXPECT_EQ(host.principal().identity.kind, eIdentityKind::HOST_EXECUTABLE);
+
+    auto twice = makeClient();
+    ASSERT_TRUE(twice.declareHostApplication("org.example.App"));
+    EXPECT_FALSE(twice.declareHostApplication("org.example.App"));
+}
+
 TEST(Client, SnapshotsExplicitGrantsOnly) {
     auto client  = makeClient(ePolicy::BYPASS_ORDINARY);
     auto context = makeShared<CPermissionContext>();

@@ -46,6 +46,23 @@ bool CClient::canInspect(const Bus::SObject& object) const {
     return hasPermissions(object.requirements) || authorize(Security::PERMISSION_ALL_BUS_OBJECTS) != Security::eAuthorization::DENIED;
 }
 
+bool CClient::declareHostApplication(std::string appID) {
+    if (m_sealed)
+        return false;
+
+    m_sealed = true;
+
+    // anyone else may be sandboxed, so their identity stays attested
+    if (m_principal.identity.host())
+        m_principal.identity = {.kind = Security::eIdentityKind::HOST_APPLICATION, .id = std::move(appID), .stable = true};
+
+    return true;
+}
+
+void CClient::seal() {
+    m_sealed = true;
+}
+
 Bus::SPrincipalSnapshot CClient::snapshot() const {
     Bus::SPrincipalSnapshot snapshot = {.principal = m_principal, .policy = m_policy};
 

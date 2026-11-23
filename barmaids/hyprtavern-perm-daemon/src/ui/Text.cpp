@@ -52,6 +52,8 @@ namespace {
             case eIdentityKind::HOST_EXECUTABLE: who = std::format("The program <b>{}</b>", ID); break;
             case eIdentityKind::FLATPAK: who = std::format("The Flatpak app <b>{}</b>", ID); break;
             case eIdentityKind::INTERNAL: who = std::format("The internal component <b>{}</b>", ID); break;
+            // declared by the program itself, so never shown as if it were attested
+            case eIdentityKind::HOST_APPLICATION: who = std::format("An unsandboxed program declaring itself as <b>{}</b>", ID); break;
             case eIdentityKind::UNKNOWN: who = "An <b>unverified app</b>"; break;
         }
 

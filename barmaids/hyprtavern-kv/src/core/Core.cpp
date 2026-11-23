@@ -14,6 +14,7 @@ namespace {
             case Hyprtavern::eIdentityKind::HOST_EXECUTABLE: return "host_executable";
             case Hyprtavern::eIdentityKind::FLATPAK: return "flatpak";
             case Hyprtavern::eIdentityKind::INTERNAL: return "internal";
+            case Hyprtavern::eIdentityKind::HOST_APPLICATION: return "host_application";
             default: return "";
         }
     }

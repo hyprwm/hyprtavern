@@ -26,6 +26,12 @@ TEST(PromptText, ShowsTheAttestedIdentityFirst) {
     EXPECT_TRUE(BODY.contains("<tt>example.settings</tt>"));
 }
 
+TEST(PromptText, FlagsDeclaredIdentities) {
+    const SRequest REQUEST = {.attestedID = "org.example.App", .kind = eIdentityKind::HOST_APPLICATION, .permission = "example.settings"};
+
+    EXPECT_TRUE(Text::promptBody(REQUEST).starts_with("An unsandboxed program declaring itself as <b>org.example.App</b>"));
+}
+
 TEST(PromptText, FlagsUnverifiedApps) {
     const SRequest REQUEST = {.displayName = "Example", .permission = "example.settings"};
 

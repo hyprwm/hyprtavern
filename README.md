@@ -24,7 +24,7 @@ Key advantages of hyprtavern over D-Bus:
 
 ## Security model
 
-Hyprtavern is a per-user session bus, not a boundary between unrestricted processes running as the same user. By default, a client that is positively identified as an unsandboxed, same-user host process bypasses ordinary permissions. Applications must still request permissions and handle denial because this policy is configurable: `hyprtavern --enforce-permissions` enforces them for host processes too.
+Hyprtavern is a per-user session bus, not a boundary between unrestricted processes running as the same user. By default, a client that is positively identified as an unsandboxed, same-user host process bypasses ordinary permissions. Applications must still request permissions and handle denial because this policy is configurable: `hyprtavern --enforce-permissions` enforces them for host processes too. Host processes are identified by their executable, unless they declare a reverse-DNS application ID, which gives them an identity of their own instead of e.g. their interpreter's.
 
 Sandboxed clients do not receive that bypass. On Linux, Flatpak applications are identified from the original peer PID through `/proc/<pid>/root/.flatpak-info` and use their Flatpak application ID as their stable identity. Other confined or ambiguous clients are treated conservatively: permissions are enforced, and persistent app-scoped state is disabled when no stable identity is available. Flatpak detection is Linux-specific; BSD uses its platform process credentials and falls back to permission enforcement when identity cannot be established confidently.
 

@@ -34,6 +34,13 @@ namespace Core {
 
         Bus::SPrincipalSnapshot snapshot() const;
 
+        // verified hosts may declare an app id, before anything depends on their identity. Others are ignored.
+        // false once the identity is fixed.
+        bool declareHostApplication(std::string appID);
+
+        // fixes the identity, from the first request that may depend on it
+        void seal();
+
         // explicit grants come from the client's live permission context, if any
         WP<Security::CPermissionContext> m_permissions;
 
@@ -43,5 +50,6 @@ namespace Core {
         Security::SPrincipal        m_principal;
         Security::ePolicy           m_policy = Security::ePolicy::ENFORCED;
         Bus::eProviderRole          m_role   = Bus::eProviderRole::NONE;
+        bool                        m_sealed = false;
     };
 }

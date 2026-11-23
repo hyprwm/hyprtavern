@@ -8,6 +8,7 @@ using namespace Security;
 
 namespace {
     const SPrincipal HOST     = {.identity = {.kind = eIdentityKind::HOST_EXECUTABLE, .id = "/usr/bin/example", .stable = true}};
+    const SPrincipal DECLARED = {.identity = {.kind = eIdentityKind::HOST_APPLICATION, .id = "org.example.App", .stable = true}};
     const SPrincipal FLATPAK  = {.identity = {.kind = eIdentityKind::FLATPAK, .id = "org.example.App", .stable = true}};
     const SPrincipal INTERNAL = {.authority = eAuthority::INTERNAL, .identity = {.kind = eIdentityKind::INTERNAL, .id = "hyprtavern-kv", .stable = true}};
 }
@@ -15,6 +16,7 @@ namespace {
 TEST(Policy, BypassesVerifiedHostsUnlessEnforced) {
     EXPECT_EQ(policyFor(HOST, false), ePolicy::BYPASS_ORDINARY);
     EXPECT_EQ(policyFor(HOST, true), ePolicy::ENFORCED);
+    EXPECT_EQ(policyFor(DECLARED, false), ePolicy::BYPASS_ORDINARY);
     EXPECT_EQ(policyFor(FLATPAK, false), ePolicy::ENFORCED);
     EXPECT_EQ(policyFor(SPrincipal{}, false), ePolicy::ENFORCED);
     EXPECT_EQ(policyFor(INTERNAL, true), ePolicy::BYPASS_ORDINARY);
@@ -29,6 +31,7 @@ TEST(Policy, AuthorizesOrdinaryPermissions) {
 
 TEST(Policy, DerivesHostStatusIndependentlyOfBypass) {
     EXPECT_EQ(authorize(HOST, ePolicy::ENFORCED, PERMISSION_UNSANDBOXED, false), eAuthorization::POLICY);
+    EXPECT_EQ(authorize(DECLARED, ePolicy::ENFORCED, PERMISSION_UNSANDBOXED, false), eAuthorization::POLICY);
     EXPECT_EQ(authorize(FLATPAK, ePolicy::BYPASS_ORDINARY, PERMISSION_UNSANDBOXED, true), eAuthorization::DENIED);
     EXPECT_EQ(authorize(INTERNAL, ePolicy::BYPASS_ORDINARY, PERMISSION_UNSANDBOXED, false), eAuthorization::DENIED);
 }

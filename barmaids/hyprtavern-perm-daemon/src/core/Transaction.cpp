@@ -25,7 +25,7 @@ std::expected<void, STransactionError> CTransactionState::setAttestedID(std::str
     if (m_asked)
         return fail(eTransactionError::INVALID_STATE, "the transaction is frozen");
 
-    if (kind > sc<uint32_t>(eIdentityKind::INTERNAL))
+    if (kind > sc<uint32_t>(eIdentityKind::HOST_APPLICATION))
         return fail(eTransactionError::INVALID_ARGUMENT, "invalid identity kind");
 
     // unknown identities have no identifier, all others need one

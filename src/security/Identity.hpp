@@ -11,10 +11,11 @@
 namespace Security {
     // values match application_identity_kind in hp_hyprtavern_core_v1
     enum class eIdentityKind : uint8_t {
-        UNKNOWN         = 0,
-        HOST_EXECUTABLE = 1,
-        FLATPAK         = 2,
-        INTERNAL        = 3,
+        UNKNOWN          = 0,
+        HOST_EXECUTABLE  = 1,
+        FLATPAK          = 2,
+        INTERNAL         = 3,
+        HOST_APPLICATION = 4,
     };
 
     // a tavern-attested application identity. Kind and id together identify an application.
@@ -25,6 +26,9 @@ namespace Security {
 
         // only stable identities may own persistent, app-scoped state
         bool persistable() const;
+
+        // a verified, unsandboxed process of the same user, whether or not it declared an app id
+        bool host() const;
 
         bool operator==(const SAppIdentity&) const = default;
     };

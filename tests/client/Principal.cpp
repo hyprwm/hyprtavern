@@ -29,6 +29,7 @@ TEST(Principal, BypassesOnlyValidOrdinaryPermissions) {
 TEST(Principal, DerivesUnobtainiumPermissions) {
     const SPrincipal INTERNAL = {.internal = true};
     const SPrincipal HOST     = {.identity = {.kind = eIdentityKind::HOST_EXECUTABLE, .id = "/usr/bin/app", .stable = true}};
+    const SPrincipal DECLARED = {.identity = {.kind = eIdentityKind::HOST_APPLICATION, .id = "org.example.App", .stable = true}};
     const SPrincipal GRANTED  = {.grants = {std::string{PERMISSION_TAVERNKEEP}, std::string{PERMISSION_UNSANDBOXED}, "core.unobtainium.all"}};
 
     EXPECT_TRUE(INTERNAL.has(PERMISSION_TAVERNKEEP));
@@ -36,6 +37,7 @@ TEST(Principal, DerivesUnobtainiumPermissions) {
 
     EXPECT_TRUE(HOST.has(PERMISSION_UNSANDBOXED));
     EXPECT_FALSE(HOST.has(PERMISSION_TAVERNKEEP));
+    EXPECT_TRUE(DECLARED.has(PERMISSION_UNSANDBOXED));
 
     // never by an explicit grant or a catch-all
     EXPECT_FALSE(GRANTED.has(PERMISSION_TAVERNKEEP));

@@ -19,6 +19,13 @@ namespace Hyprtavern {
         // self-asserted, shown when the user is asked for permissions
         std::string appName, appDescription;
 
+        /*
+            The app's reverse-DNS id, e.g. org.example.App, ideally its desktop file id. Unsandboxed apps get it as
+            their identity, so they don't share one with everything else run by the same executable, e.g. an
+            interpreter. Sandboxed apps keep their attested one, so it's always fine to set.
+        */
+        std::string appID;
+
         // keep the permission context's token in the app's kv values, so permanent grants are restored on the next run
         bool persistPermissions = true;
 

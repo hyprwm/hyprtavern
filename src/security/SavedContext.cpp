@@ -56,7 +56,7 @@ std::optional<SSavedContext> Security::parseSavedContext(std::string_view data) 
 
     const SAppIdentity OWNER = {.kind = sc<eIdentityKind>(RECORD->ownerKind), .id = RECORD->ownerId, .stable = true};
 
-    if (RECORD->ownerKind > sc<uint32_t>(eIdentityKind::INTERNAL) || !OWNER.persistable() || !validGrants(RECORD->grants))
+    if (RECORD->ownerKind > sc<uint32_t>(eIdentityKind::HOST_APPLICATION) || !OWNER.persistable() || !validGrants(RECORD->grants))
         return std::nullopt;
 
     return SSavedContext{

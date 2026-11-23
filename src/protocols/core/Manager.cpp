@@ -10,6 +10,7 @@
 #include "../../bus/PrincipalTokens.hpp"
 #include "../../bus/Registry.hpp"
 
+#include <common/AppID.hpp>
 #include <common/Environment.hpp>
 #include <common/Limits.hpp>
 #include <common/PermissionName.hpp>
@@ -18,6 +19,8 @@
 CCoreManagerResource::CCoreManagerResource(SP<CHpHyprtavernCoreManagerV1Object> resource, SP<Core::CClient> client) : m_resource(std::move(resource)), m_client(client) {
     m_resource->setDestroy([this] { PROTO::core->destroyResource(this); });
     m_resource->setOnDestroy([this] { PROTO::core->destroyResource(this); });
+
+    m_resource->setDeclareHostApplication([this](const char* appID) { onDeclareHostApplication(appID); });
 
     m_resource->setCreatePermissionContext([this](uint32_t seq, const char* token) { onCreatePermissionContext(seq, token); });
 
@@ -47,11 +50,30 @@ void CCoreManagerResource::sendReady() {
 }
 
 bool CCoreManagerResource::ensureReady() {
-    if (m_ready && m_client)
-        return true;
+    if (!m_ready || !m_client) {
+        m_resource->error(HP_HYPRTAVERN_CORE_V1_PROTOCOL_ERRORS_NOT_READY, "request sent before ready");
+        return false;
+    }
 
-    m_resource->error(HP_HYPRTAVERN_CORE_V1_PROTOCOL_ERRORS_NOT_READY, "request sent before ready");
-    return false;
+    // every other request may depend on the identity, so it can't change anymore
+    m_client->seal();
+    return true;
+}
+
+void CCoreManagerResource::onDeclareHostApplication(const char* appID) {
+    // not through ensureReady, which fixes the identity
+    if (!m_ready || !m_client) {
+        m_resource->error(HP_HYPRTAVERN_CORE_V1_PROTOCOL_ERRORS_NOT_READY, "request sent before ready");
+        return;
+    }
+
+    if (!Security::isValidAppID(appID)) {
+        m_resource->error(HP_HYPRTAVERN_CORE_V1_PROTOCOL_ERRORS_INVALID_ARGUMENT, "invalid app id");
+        return;
+    }
+
+    if (!m_client->declareHostApplication(appID))
+        m_resource->error(HP_HYPRTAVERN_CORE_V1_PROTOCOL_ERRORS_INVALID_STATE, "app ids must be declared once, before any other request");
 }
 
 void CCoreManagerResource::onCreatePermissionContext(uint32_t seq, const char* token) {
