@@ -32,6 +32,9 @@ namespace Hyprtavern {
 
         WP<CBusObject>                    m_self;
 
+        // the bus couldn't host it, so it's inert
+        bool m_failed = false;
+
       private:
         struct SClient {
             WP<Hyprwire::IServerClient> client;

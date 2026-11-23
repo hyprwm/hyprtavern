@@ -31,6 +31,27 @@ void CCoreProtocol::bindManager(SP<Hyprwire::IObject> object) {
         MANAGER->sendReady();
 }
 
+void CCoreProtocol::failBusObject(SP<CHpHyprtavernBusObjectV1Object> object) {
+    const auto RAW = object.get();
+
+    // no other handlers, so everything but destroy is ignored
+    object->setDestroy([this, RAW] { dropFailedBusObject(RAW); });
+    object->setOnDestroy([this, RAW] { dropFailedBusObject(RAW); });
+    object->sendFailed();
+
+    m_failedBusObjects.emplace(RAW, std::move(object));
+}
+
+void CCoreProtocol::dropFailedBusObject(CHpHyprtavernBusObjectV1Object* object) {
+    const auto IT = m_failedBusObjects.find(object);
+    if (IT == m_failedBusObjects.end())
+        return;
+
+    // the wire object may outlive ours
+    IT->second->setOnDestroy({});
+    m_failedBusObjects.erase(IT);
+}
+
 void CCoreProtocol::setReady() {
     m_ready = true;
 

@@ -12,6 +12,7 @@ std::string_view Hyprtavern::errorString(eError error) {
         case eError::BAD_PROTOCOL: return "the object does not expose a requested protocol";
         case eError::INSUFFICIENT_PERMISSIONS: return "insufficient permissions";
         case eError::DENIED: return "denied";
+        case eError::BUS_FULL: return "the bus can't host more objects";
         case eError::UNKNOWN: break;
     }
 

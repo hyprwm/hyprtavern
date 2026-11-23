@@ -40,7 +40,7 @@ TEST(Registry, BoundsLiveObjects) {
         ASSERT_TRUE(registry.add(1 + i / MAX_OBJECTS_PER_OWNER, {}, "object", {}));
     }
 
-    EXPECT_EQ(registry.add(0, {}, "object", {}).error(), eRegistryError::LIMIT_REACHED);
+    EXPECT_EQ(registry.add(0, {}, "object", {}).error(), eRegistryError::BUS_FULL);
 
     registry.remove(1);
     EXPECT_TRUE(registry.add(0, {}, "object", {}));

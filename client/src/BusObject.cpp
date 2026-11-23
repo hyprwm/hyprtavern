@@ -14,6 +14,7 @@ using namespace Hyprutils::OS;
 CBusObject::CBusObject(SP<CTavern> tavern, SP<CCHpHyprtavernBusObjectV1Object> object, SP<Hyprwire::IServerSocket> server) :
     m_tavern(std::move(tavern)), m_object(std::move(object)), m_server(std::move(server)) {
     m_object->setNewFd([this](int fd, const char* token, const std::vector<const char*>& scope) { onNewFd(fd, token, scope); });
+    m_object->setFailed([this] { m_failed = true; });
 
     m_object->setExposeProtocolError([this](uint32_t reason, const char* name) {
         const auto ERROR = reason > sc<uint32_t>(eExposeError::INVALID_REGISTRATION) ? eExposeError::INVALID_REGISTRATION : sc<eExposeError>(reason);

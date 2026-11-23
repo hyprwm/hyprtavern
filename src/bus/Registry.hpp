@@ -36,6 +36,8 @@ namespace Bus {
     };
 
     enum class eRegistryError : uint8_t {
+        // the bus can't host another object, which is no single client's fault
+        BUS_FULL,
         LIMIT_REACHED,
         ALREADY_EXPOSED,
         UNAUTHORIZED_PROVIDER,

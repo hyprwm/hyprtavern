@@ -113,6 +113,8 @@ namespace Hyprtavern {
         /*
             Create an object on the bus for others to discover and connect to. requiredPermissions are
             needed to discover or connect to it at all, from the start.
+
+            Waits for the tavern's verdict, which fails with BUS_FULL if the bus can't host another object.
         */
         virtual std::expected<Hyprutils::Memory::CSharedPointer<IBusObject>, eError> createObject(const std::string&              name,
                                                                                                   const std::vector<std::string>& requiredPermissions = {}) = 0;

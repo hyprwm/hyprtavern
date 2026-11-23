@@ -19,6 +19,7 @@ namespace Hyprtavern {
         BAD_PROTOCOL,
         INSUFFICIENT_PERMISSIONS,
         DENIED,
+        BUS_FULL,
         UNKNOWN,
     };
 

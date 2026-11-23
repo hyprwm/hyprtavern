@@ -318,6 +318,12 @@ std::expected<SP<IBusObject>, eError> CTavern::createObject(const std::string& n
     auto object    = makeShared<CBusObject>(m_self.lock(), std::move(wire), std::move(server));
     object->m_self = object;
 
+    // a refusal arrives before the roundtrip completes
+    m_socket->roundtrip();
+
+    if (object->m_failed)
+        return std::unexpected(eError::BUS_FULL);
+
     return object;
 }
 

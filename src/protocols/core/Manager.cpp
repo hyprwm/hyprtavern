@@ -103,14 +103,22 @@ void CCoreManagerResource::onGetBusObject(uint32_t seq, const char* name, const 
 
     const auto CLIENT = m_client.lock();
     const auto ID     = Bus::registry->add(CLIENT->id(), CLIENT->principal().identity, name, std::move(*permissions));
-    if (!ID) {
+    if (!ID && ID.error() != Bus::eRegistryError::BUS_FULL) {
         m_resource->error(HP_HYPRTAVERN_CORE_V1_PROTOCOL_ERRORS_LIMIT_EXCEEDED, "too many bus objects");
         return;
     }
 
     auto object = PROTO::core->createObject<CHpHyprtavernBusObjectV1Object>(m_resource->getObject(), seq);
     if (!object) {
-        Bus::registry->remove(*ID);
+        if (ID)
+            Bus::registry->remove(*ID);
+
+        return;
+    }
+
+    // not this client's fault, so not a protocol error
+    if (!ID) {
+        PROTO::core->failBusObject(std::move(object));
         return;
     }
 

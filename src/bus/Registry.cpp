@@ -59,7 +59,7 @@ std::optional<std::pair<std::string, std::string>> Bus::parseQueryProperty(std::
 std::expected<uint32_t, eRegistryError> CRegistry::add(uint64_t owner, Security::SAppIdentity provider, std::string name, std::vector<std::string> requirements) {
     // ids identify a single registration, and are never reused
     if (m_objects.size() >= MAX_OBJECTS || m_nextID == 0)
-        return std::unexpected(eRegistryError::LIMIT_REACHED);
+        return std::unexpected(eRegistryError::BUS_FULL);
 
     if (const auto OWNED = m_owned.find(owner); OWNED != m_owned.end() && OWNED->second >= MAX_OBJECTS_PER_OWNER)
         return std::unexpected(eRegistryError::LIMIT_REACHED);

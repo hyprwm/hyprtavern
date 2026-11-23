@@ -48,7 +48,11 @@ class CCoreProtocol {
         return resource;
     }
 
-    void                                                                                bindManager(SP<Hyprwire::IObject> object);
+    void bindManager(SP<Hyprwire::IObject> object);
+
+    // keeps a bus object the bus can't host, inert, until it's destroyed
+    void                                                                                failBusObject(SP<CHpHyprtavernBusObjectV1Object> object);
+    void                                                                                dropFailedBusObject(CHpHyprtavernBusObjectV1Object* object);
 
     void                                                                                destroyResource(CCoreManagerResource* resource);
     void                                                                                destroyResource(CBusObjectResource* resource);
@@ -63,11 +67,13 @@ class CCoreProtocol {
     std::unordered_map<CConnectionPrincipalResource*, SP<CConnectionPrincipalResource>> m_principals;
 
     // by bus object id, and by client id
-    std::unordered_map<uint32_t, SP<CBusObjectResource>>         m_busObjects;
-    std::unordered_map<uint64_t, SP<CPermissionContextResource>> m_contexts;
+    std::unordered_map<uint32_t, SP<CBusObjectResource>>                                    m_busObjects;
+    std::unordered_map<uint64_t, SP<CPermissionContextResource>>                            m_contexts;
 
-    WP<Hyprwire::IServerSocket>                                  m_socket;
-    bool                                                         m_ready = false;
+    std::unordered_map<CHpHyprtavernBusObjectV1Object*, SP<CHpHyprtavernBusObjectV1Object>> m_failedBusObjects;
+
+    WP<Hyprwire::IServerSocket>                                                             m_socket;
+    bool                                                                                    m_ready = false;
 
     friend class CCoreManagerResource;
     friend class CBusObjectResource;
