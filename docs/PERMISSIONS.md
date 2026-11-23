@@ -30,7 +30,7 @@ A connection-principal token MUST retain an admission-time snapshot independentl
 
 Session grants last until the permission context is destroyed or its client connection closes, whichever happens first. They do not automatically authorize other connections from the same application. Persistent grants are saved under a restoration token and its stable attested owner. Core `permission_result.grant_mode` MUST report the actual lifetime of explicit grants; permanent success MUST NOT be reported before the grant is durably stored. Policy results are not explicit or persistent grants.
 
-The union of a context's session and permanent explicit grants MUST contain at most 9999 distinct names so that principal snapshots fit the wire array limit. Requests that would exceed this limit MUST return `permission_result` with `failed` without adding or persisting a grant. Restoration that would exceed the limit MUST make the context unavailable, without partial restoration or truncation. Explicit grant snapshots MUST contain each name at most once.
+The union of a context's session and permanent explicit grants MUST contain at most 512 distinct names. Requests that would exceed this limit MUST return `permission_result` with `failed` without adding or persisting a grant. A context MUST have at most 512 pending requests, and further requests MUST return `failed` as well. Restoration that would exceed the limit MUST make the context unavailable, without partial restoration or truncation. Explicit grant snapshots MUST contain each name at most once.
 
 Enumeration and revocation of saved grants are reserved for a separate permission-management protocol; the core v1 protocol does not provide those operations.
 

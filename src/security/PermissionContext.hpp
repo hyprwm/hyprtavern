@@ -10,7 +10,10 @@
 
 namespace Security {
     // session and permanent explicit grants together may contain at most this many names
-    constexpr size_t MAX_GRANTS = 9999;
+    constexpr size_t MAX_GRANTS = 512;
+
+    // requests pending on a single context
+    constexpr size_t MAX_PENDING_REQUESTS = 512;
 
     enum class eGrantLifetime : uint8_t {
         SESSION,
@@ -44,6 +47,7 @@ namespace Security {
         // at most one request per permission may be pending.
         bool             beginRequest(const std::string& permission);
         void             endRequest(const std::string& permission);
+        size_t           pendingCount() const;
 
         SDisplayIdentity m_display;
 

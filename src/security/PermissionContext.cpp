@@ -86,3 +86,7 @@ bool CPermissionContext::beginRequest(const std::string& permission) {
 void CPermissionContext::endRequest(const std::string& permission) {
     m_pending.erase(permission);
 }
+
+size_t CPermissionContext::pendingCount() const {
+    return m_pending.size();
+}

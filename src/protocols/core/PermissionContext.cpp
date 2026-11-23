@@ -206,6 +206,12 @@ void CPermissionContextResource::onRequestPermission(const char* permission, uin
         return;
     }
 
+    // bounded, so a single context can't queue prompts without end
+    if (m_context->pendingCount() > MAX_PENDING_REQUESTS) {
+        finish(PERMISSION, HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_RESULT_FAILED);
+        return;
+    }
+
     const bool PERMANENT = mode == HP_HYPRTAVERN_CORE_V1_SECURITY_PERMISSION_MODE_PERMANENT;
 
     // restored grants could already satisfy it
